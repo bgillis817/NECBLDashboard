@@ -243,23 +243,23 @@ process_pitchers <- function(df) {
 # Initial load at startup
 .raw_cache <- new.env(parent = emptyenv())
 .raw_cache$raw_all            <- NULL
-.raw_cache$hitters_data()  <- NULL
+.raw_cache$hitters_processed  <- NULL
 .raw_cache$pitchers_processed <- NULL
-.raw_cache$p_data_r()         <- NULL
-.raw_cache$p_seqs_r()         <- NULL
-.raw_cache$p_pairs_r()        <- NULL
+.raw_cache$p_data_all         <- NULL
+.raw_cache$p_seqs_all         <- NULL
+.raw_cache$p_pairs_all        <- NULL
 .raw_cache$last_loaded        <- NULL
 
 load_and_cache <- function() {
   message("Loading data from Google Drive...")
   raw <- load_drive_data()
   .raw_cache$raw_all            <- raw
-  .raw_cache$hitters_data()  <- process_hitters(raw)
+  .raw_cache$hitters_processed  <- process_hitters(raw)
   pit                           <- process_pitchers(raw)
   .raw_cache$pitchers_processed <- pit
-  .raw_cache$p_data_r()         <- if (!is.null(pit)) pit$data      else NULL
-  .raw_cache$p_seqs_r()         <- if (!is.null(pit)) pit$sequences else NULL
-  .raw_cache$p_pairs_r()        <- if (!is.null(pit)) pit$pairs     else NULL
+  .raw_cache$p_data_all         <- if (!is.null(pit)) pit$data      else NULL
+  .raw_cache$p_seqs_all         <- if (!is.null(pit)) pit$sequences else NULL
+  .raw_cache$p_pairs_all        <- if (!is.null(pit)) pit$pairs     else NULL
   .raw_cache$last_loaded        <- Sys.time()
   message("Data load complete: ", .raw_cache$last_loaded)
 }
