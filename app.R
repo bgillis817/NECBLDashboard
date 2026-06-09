@@ -13,6 +13,8 @@ library(DT)
 library(scales)
 library(googledrive)
 library(googlesheets4)
+library(gargle)
+library(jsonlite)
 
 # ── Null coalesce ─────────────────────────────────────────────────────────────
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
@@ -24,11 +26,28 @@ DRIVE_FOLDER_ID <- "1haJdctNyLTx81GXlvCdBRDSWKrDAlKAw"
 auth_drive <- function() {
   svc_json <- Sys.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
   if (nchar(svc_json) > 10) {
-    tmp <- tempfile(fileext = ".json")
-    writeLines(svc_json, tmp)
-    googledrive::drive_auth(path = tmp)
-    googlesheets4::gs4_auth(path = tmp)
+    tryCatch({
+      tmp <- tempfile(fileext = ".json")
+      writeLines(svc_json, tmp)
+      googledrive::drive_auth(path = tmp)
+      message("Drive auth successful")
+    }, error = function(e) {
+      message("Drive auth error: ", e$message)
+      # Try parsing as a gargle credential directly
+      tryCatch({
+        creds <- gargle::credentials_service_account(
+          scopes = "https://www.googleapis.com/auth/drive",
+          path   = jsonlite::fromJSON(svc_json)
+        )
+        googledrive::drive_auth(token = creds)
+        message("Drive auth via gargle successful")
+      }, error = function(e2) {
+        message("Drive auth gargle error: ", e2$message)
+        googledrive::drive_deauth()
+      })
+    })
   } else {
+    message("No service account JSON found")
     googledrive::drive_deauth()
   }
 }
