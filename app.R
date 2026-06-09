@@ -22,29 +22,30 @@ library(jsonlite)
 # ── Google Drive folder ───────────────────────────────────────────────────────
 DRIVE_FOLDER_ID <- "1haJdctNyLTx81GXlvCdBRDSWKrDAlKAw"
 
-# Authenticate using service account JSON stored as env var
+# Authenticate using service account — bundled file takes priority over env var
 auth_drive <- function() {
+  # Try bundled file first (written by GitHub Actions during deploy)
+  bundled <- "service_account.json"
+  if (file.exists(bundled)) {
+    tryCatch({
+      googledrive::drive_auth(path = bundled)
+      message("Drive auth successful (bundled file)")
+      return(invisible(TRUE))
+    }, error = function(e) {
+      message("Bundled auth error: ", e$message)
+    })
+  }
+  # Fall back to env var
   svc_json <- Sys.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
   if (nchar(svc_json) > 10) {
     tryCatch({
       tmp <- tempfile(fileext = ".json")
       writeLines(svc_json, tmp)
       googledrive::drive_auth(path = tmp)
-      message("Drive auth successful")
+      message("Drive auth successful (env var)")
     }, error = function(e) {
       message("Drive auth error: ", e$message)
-      # Try parsing as a gargle credential directly
-      tryCatch({
-        creds <- gargle::credentials_service_account(
-          scopes = "https://www.googleapis.com/auth/drive",
-          path   = jsonlite::fromJSON(svc_json)
-        )
-        googledrive::drive_auth(token = creds)
-        message("Drive auth via gargle successful")
-      }, error = function(e2) {
-        message("Drive auth gargle error: ", e2$message)
-        googledrive::drive_deauth()
-      })
+      googledrive::drive_deauth()
     })
   } else {
     message("No service account JSON found")
