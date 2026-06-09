@@ -239,19 +239,32 @@ process_pitchers <- function(df) {
   }, error = function(e) { message("Pitcher process error: ", e$message); NULL })
 }
 
-# ── Load data at startup ──────────────────────────────────────────────────────
-message("Loading data from Google Drive...")
-raw_all <- load_drive_data()
+# ── Data stored as global reactive-ready objects (refreshed in server) ────────
+# Initial load at startup
+.raw_cache <- new.env(parent = emptyenv())
+.raw_cache$raw_all            <- NULL
+.raw_cache$hitters_data()  <- NULL
+.raw_cache$pitchers_processed <- NULL
+.raw_cache$p_data_r()         <- NULL
+.raw_cache$p_seqs_r()         <- NULL
+.raw_cache$p_pairs_r()        <- NULL
+.raw_cache$last_loaded        <- NULL
 
-# Split into hitters (PA-level rows) and pitchers (pitch-level rows)
-# Hitters: rows where Batter column is populated and BatterTeam exists
-# Pitchers: all rows (pitch level) — same files, different grouping
-hitters_processed  <- process_hitters(raw_all)
-pitchers_processed <- process_pitchers(raw_all)
+load_and_cache <- function() {
+  message("Loading data from Google Drive...")
+  raw <- load_drive_data()
+  .raw_cache$raw_all            <- raw
+  .raw_cache$hitters_data()  <- process_hitters(raw)
+  pit                           <- process_pitchers(raw)
+  .raw_cache$pitchers_processed <- pit
+  .raw_cache$p_data_r()         <- if (!is.null(pit)) pit$data      else NULL
+  .raw_cache$p_seqs_r()         <- if (!is.null(pit)) pit$sequences else NULL
+  .raw_cache$p_pairs_r()        <- if (!is.null(pit)) pit$pairs     else NULL
+  .raw_cache$last_loaded        <- Sys.time()
+  message("Data load complete: ", .raw_cache$last_loaded)
+}
 
-p_data_all  <- if (!is.null(pitchers_processed)) pitchers_processed$data       else NULL
-p_seqs_all  <- if (!is.null(pitchers_processed)) pitchers_processed$sequences  else NULL
-p_pairs_all <- if (!is.null(pitchers_processed)) pitchers_processed$pairs      else NULL
+load_and_cache()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 stat_card <- function(value, label) {
@@ -425,6 +438,14 @@ ui <- navbarPage(
   id = "mainNav", collapsible = TRUE,
   header = tags$head(
     tags$style(HTML(dark_css)),
+    tags$style(HTML("
+      .refresh-bar{background:#141720;border-bottom:1px solid #2a2d3a;
+        padding:6px 20px;display:flex;align-items:center;gap:16px;}
+      .refresh-bar .btn{background:#1e2235;color:#e8eaf0;border:1px solid #2e3350;
+        border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;}
+      .refresh-bar .btn:hover{background:#ff4655;border-color:#ff4655;color:#fff;}
+      .last-updated{color:#6b7280;font-size:12px;}
+    ")),
     tags$script(HTML("
       Shiny.addCustomMessageHandler('setSeasonBtns', function(m) {
         var pfx = m.prefix; var s = m.season;
@@ -435,6 +456,10 @@ ui <- navbarPage(
         document.getElementById(pfx+'_'+s).classList.add('active');
       });
     "))
+  ),
+  footer = tags$div(class="refresh-bar",
+    actionButton("refresh_data", "Refresh Data", icon=icon("rotate"), class="btn"),
+    tags$span(class="last-updated", textOutput("last_updated_txt", inline=TRUE))
   ),
 
   # ══════════════════════════════════════════════════════════════════════════
@@ -772,6 +797,18 @@ ui <- navbarPage(
         br(),
         tags$div(class="section-header","Qualified Pitchers — Ranked by CSW%"),
         dataTableOutput("lb_pitchers")
+      ),
+      tabPanel("Team Hitting",
+        br(),
+        tags$div(class="section-header","Cumulative Team Hitting Stats"),
+        tags$div(class="section-sub","Click any column header to sort"),
+        dataTableOutput("lb_team_hitting")
+      ),
+      tabPanel("Team Pitching",
+        br(),
+        tags$div(class="section-header","Cumulative Team Pitching Stats"),
+        tags$div(class="section-sub","Click any column header to sort"),
+        dataTableOutput("lb_team_pitching")
       )
     )
   )
@@ -781,6 +818,34 @@ ui <- navbarPage(
 #  SERVER
 # ============================================================================
 server <- function(input, output, session) {
+
+  # ── Refresh trigger ───────────────────────────────────────────────────────
+  refresh_trigger <- reactiveVal(0)
+
+  observeEvent(input$refresh_data, {
+    showNotification("Refreshing data from Google Drive...",
+                     type="message", duration=NULL, id="refreshing")
+    load_and_cache()
+    removeNotification("refreshing")
+    showNotification("Data refreshed successfully!", type="message", duration=3)
+    refresh_trigger(refresh_trigger() + 1)
+  })
+
+  output$last_updated_txt <- renderText({
+    refresh_trigger()
+    if (!is.null(.raw_cache$last_loaded))
+      paste("Last updated:", format(.raw_cache$last_loaded, "%m/%d/%Y %I:%M %p"))
+    else "Not yet loaded"
+  })
+
+  # ── Data accessors (read from cache, refresh on trigger) ──────────────────
+  hitters_data <- reactive({
+    refresh_trigger()
+    .raw_cache$hitters_processed
+  })
+  p_data_r  <- reactive({ refresh_trigger(); .raw_cache$p_data_all  })
+  p_seqs_r  <- reactive({ refresh_trigger(); .raw_cache$p_seqs_all  })
+  p_pairs_r <- reactive({ refresh_trigger(); .raw_cache$p_pairs_all })
 
   h_season <- reactive({ input$h_season %||% "2026" })
   p_season <- reactive({ input$p_season %||% "2026" })
@@ -801,8 +866,8 @@ server <- function(input, output, session) {
 
   # ── Hitter data slices ────────────────────────────────────────────────────
   h_raw <- reactive({
-    req(!is.null(hitters_processed))
-    hitters_processed %>%
+    req(!is.null(hitters_data()))
+    hitters_data() %>%
       filter(Season == as.integer(h_season()))
   })
 
@@ -1154,16 +1219,16 @@ server <- function(input, output, session) {
   #  PITCHER REACTIVES
   # ==========================================================================
   p_raw <- reactive({
-    req(!is.null(p_data_all))
-    p_data_all %>% filter(Season == as.integer(p_season()))
+    req(!is.null(p_data_r()))
+    p_data_r() %>% filter(Season == as.integer(p_season()))
   })
   p_seqs <- reactive({
-    req(!is.null(p_seqs_all))
-    p_seqs_all %>% filter(Season == as.integer(p_season()))
+    req(!is.null(p_seqs_r()))
+    p_seqs_r() %>% filter(Season == as.integer(p_season()))
   })
   p_pairs <- reactive({
-    req(!is.null(p_pairs_all))
-    p_pairs_all
+    req(!is.null(p_pairs_r()))
+    p_pairs_r()
   })
 
   output$p_teamSelect <- renderUI({
@@ -1567,8 +1632,8 @@ server <- function(input, output, session) {
   #  LEADERBOARDS
   # ==========================================================================
   output$lb_hitters <- renderDataTable({
-    req(!is.null(hitters_processed))
-    d <- hitters_processed%>%filter(Season==as.integer(lb_season()))
+    req(!is.null(hitters_data()))
+    d <- hitters_data()%>%filter(Season==as.integer(lb_season()))
     min_pa <- input$lb_min_pa%||%20
     tbl <- d%>%group_by(Batter,Team=BatterTeamFull)%>%
       summarise(
@@ -1591,8 +1656,8 @@ server <- function(input, output, session) {
   })
 
   output$lb_pitchers <- renderDataTable({
-    req(!is.null(p_data_all))
-    d <- p_data_all%>%filter(Season==as.integer(lb_season()))
+    req(!is.null(p_data_r()))
+    d <- p_data_r()%>%filter(Season==as.integer(lb_season()))
     min_bf <- input$lb_min_bf%||%30
     tbl <- d%>%group_by(Pitcher,Team=PitcherTeamFull)%>%
       summarise(
@@ -1610,6 +1675,83 @@ server <- function(input, output, session) {
       arrange(desc(`CSW%`))%>%
       dplyr::select(Pitcher,Team,Pitches,BF,SO,BB,`CSW%`,`Zone%`,`Whiff%`,`Avg Velo`)
     datatable(tbl,options=dt_opts,rownames=FALSE)
+  })
+
+  output$lb_team_hitting <- renderDataTable({
+    req(!is.null(hitters_data()))
+    d <- hitters_data()%>%filter(Season==as.integer(lb_season()))
+    tbl <- d%>%group_by(Team=BatterTeamFull)%>%
+      summarise(
+        PA   = n(),
+        H    = sum(PlayResult%in%c("Single","Double","Triple","HomeRun")),
+        `1B` = sum(PlayResult=="Single"),
+        `2B` = sum(PlayResult=="Double"),
+        `3B` = sum(PlayResult=="Triple"),
+        HR   = sum(PlayResult=="HomeRun"),
+        BB   = sum(PlayResult=="Walk"),
+        HBP  = sum(PlayResult=="HitByPitch"),
+        AB   = PA-BB-HBP,
+        TB   = `1B`+2*`2B`+3*`3B`+4*HR,
+        R_PA = PA,
+        BA   = ifelse(AB>0,  round(H/AB,3),  NA),
+        OBP  = ifelse(PA>0,  round((H+BB+HBP)/PA,3), NA),
+        SLG  = ifelse(AB>0,  round(TB/AB,3), NA),
+        OPS  = ifelse(!is.na(OBP)&!is.na(SLG), round(OBP+SLG,3), NA),
+        wOBA = round(sum(wOBA_contribution,na.rm=TRUE)/PA,3),
+        `GB%`= {bbe=sum(TaggedHitType%in%c("GroundBall","FlyBall","LineDrive","Popup"),na.rm=TRUE);
+                ifelse(bbe>0,paste0(round(sum(TaggedHitType=="GroundBall",na.rm=TRUE)/bbe*100,1),"%"),"—")},
+        `FB%`= {bbe=sum(TaggedHitType%in%c("GroundBall","FlyBall","LineDrive","Popup"),na.rm=TRUE);
+                ifelse(bbe>0,paste0(round(sum(TaggedHitType=="FlyBall",na.rm=TRUE)/bbe*100,1),"%"),"—")},
+        `LD%`= {bbe=sum(TaggedHitType%in%c("GroundBall","FlyBall","LineDrive","Popup"),na.rm=TRUE);
+                ifelse(bbe>0,paste0(round(sum(TaggedHitType=="LineDrive",na.rm=TRUE)/bbe*100,1),"%"),"—")},
+        `K%` = ifelse(PA>0,paste0(round(sum(KorBB=="Strikeout",na.rm=TRUE)/PA*100,1),"%"),"—"),
+        `BB%`= ifelse(PA>0,paste0(round(BB/PA*100,1),"%"),"—"),
+        .groups="drop"
+      )%>%
+      arrange(desc(wOBA))%>%
+      dplyr::select(Team,PA,BA,OBP,SLG,OPS,wOBA,HR,`2B`,BB,`K%`,`BB%`,`GB%`,`FB%`,`LD%`)
+    datatable(
+      tbl,
+      options=c(dt_opts, list(dom="ft", order=list(list(6,"desc")))),
+      rownames=FALSE
+    )
+  })
+
+  output$lb_team_pitching <- renderDataTable({
+    req(!is.null(p_data_r()))
+    d <- p_data_r()%>%filter(Season==as.integer(lb_season()))
+    tbl <- d%>%group_by(Team=PitcherTeamFull)%>%
+      summarise(
+        Pitches  = n(),
+        BF       = sum(PACheck,na.rm=TRUE),
+        SO       = sum(StrikeoutCheck,na.rm=TRUE),
+        BB       = sum(WalkCheck,na.rm=TRUE),
+        H        = sum(HCheck,na.rm=TRUE),
+        HR       = sum(PlayResult=="HomeRun",na.rm=TRUE),
+        `K%`     = ifelse(BF>0,paste0(round(SO/BF*100,1),"%"),"—"),
+        `BB%`    = ifelse(BF>0,paste0(round(BB/BF*100,1),"%"),"—"),
+        `K-BB%`  = ifelse(BF>0,paste0(round((SO-BB)/BF*100,1),"%"),"—"),
+        `CSW%`   = paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
+        `Zone%`  = paste0(round(mean(ZoneCheck,na.rm=TRUE)*100,1),"%"),
+        `Whiff%` = {sw=sum(SwingCheck,na.rm=TRUE);
+                    paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
+        `Chase%` = {oz=sum(!ZoneCheck,na.rm=TRUE);
+                    paste0(if(oz>0)round(sum(SwingCheck[!ZoneCheck],na.rm=TRUE)/oz*100,1)else 0,"%")},
+        `Avg Velo`= round(mean(RelSpeed,na.rm=TRUE),1),
+        `GB%`    = {bbe=sum(TaggedHitType%in%c("GroundBall","FlyBall","LineDrive","Popup"),na.rm=TRUE);
+                    ifelse(bbe>0,paste0(round(sum(TaggedHitType=="GroundBall",na.rm=TRUE)/bbe*100,1),"%"),"—")},
+        `FB%`    = {bbe=sum(TaggedHitType%in%c("GroundBall","FlyBall","LineDrive","Popup"),na.rm=TRUE);
+                    ifelse(bbe>0,paste0(round(sum(TaggedHitType=="FlyBall",na.rm=TRUE)/bbe*100,1),"%"),"—")},
+        .groups="drop"
+      )%>%
+      arrange(desc(`CSW%`))%>%
+      dplyr::select(Team,Pitches,BF,SO,BB,`K%`,`BB%`,`K-BB%`,
+                    `CSW%`,`Zone%`,`Whiff%`,`Chase%`,`Avg Velo`,`GB%`,`FB%`)
+    datatable(
+      tbl,
+      options=c(dt_opts, list(dom="ft", order=list(list(8,"desc")))),
+      rownames=FALSE
+    )
   })
 }
 
