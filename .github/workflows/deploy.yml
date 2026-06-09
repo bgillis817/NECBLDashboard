@@ -5,8 +5,8 @@ on:
     branches:
       - main
   schedule:
-    # Runs every night at 3am ET (7am UTC)
-    - cron: '0 7 * * *'
+    # Runs every night at 4am ET (8am UTC)
+    - cron: '0 8 * * *'
 
 jobs:
   deploy:
@@ -21,14 +21,17 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev \
+            texlive-xetex texlive-fonts-recommended texlive-latex-extra
 
       - name: Install R packages
         run: |
           install.packages(c(
             "shiny", "dplyr", "readr", "ggplot2", "DT", "scales",
-            "googledrive", "googlesheets4", "gargle", "rsconnect"
+            "googledrive", "googlesheets4", "gargle", "rsconnect",
+            "rmarkdown", "knitr", "tinytex"
           ))
+          tinytex::install_tinytex()
         shell: Rscript {0}
 
       - name: Deploy to shinyapps.io
@@ -43,12 +46,28 @@ jobs:
             token  = Sys.getenv("SHINYAPPS_TOKEN"),
             secret = Sys.getenv("SHINYAPPS_SECRET")
           )
-          rsconnect::deployApp(
-            appDir   = ".",
-            appName  = "NECBLDashboard",
-            account  = Sys.getenv("SHINYAPPS_ACCOUNT"),
-            server   = "shinyapps.io",
-            forceUpdate = TRUE,
-            lint     = FALSE
-          )
+          deploy_with_retry <- function(attempts=3, wait_secs=30) {
+            for (i in seq_len(attempts)) {
+              result <- tryCatch({
+                rsconnect::deployApp(
+                  appDir      = ".",
+                  appName     = "NECBLDashboard",
+                  account     = Sys.getenv("SHINYAPPS_ACCOUNT"),
+                  server      = "shinyapps.io",
+                  forceUpdate = TRUE,
+                  lint        = FALSE
+                )
+                TRUE
+              }, error = function(e) {
+                message("Attempt ", i, " failed: ", e$message)
+                if (i < attempts) {
+                  message("Waiting ", wait_secs, "s before retry...")
+                  Sys.sleep(wait_secs)
+                }
+                FALSE
+              })
+              if (result) break
+            }
+          }
+          deploy_with_retry()
         shell: Rscript {0}
