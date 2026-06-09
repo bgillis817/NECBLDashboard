@@ -37,6 +37,12 @@ jobs:
           ))
         shell: Rscript {0}
 
+      - name: Write Google service account credentials
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+
       - name: Deploy to shinyapps.io
         env:
           SHINYAPPS_ACCOUNT: ${{ secrets.SHINYAPPS_ACCOUNT }}
@@ -49,25 +55,6 @@ jobs:
             token  = Sys.getenv("SHINYAPPS_TOKEN"),
             secret = Sys.getenv("SHINYAPPS_SECRET")
           )
-          # Set Google service account as app environment variable on shinyapps.io
-          app_id <- tryCatch({
-            apps <- rsconnect::applications(
-              account = Sys.getenv("SHINYAPPS_ACCOUNT"),
-              server  = "shinyapps.io"
-            )
-            apps$id[apps$name == "NECBLDashboard"][1]
-          }, error = function(e) NULL)
-
-          if (!is.null(app_id) && !is.na(app_id)) {
-            rsconnect::configureApp(
-              appName = "NECBLDashboard",
-              account = Sys.getenv("SHINYAPPS_ACCOUNT"),
-              server  = "shinyapps.io",
-              envVars = list(
-                GOOGLE_SERVICE_ACCOUNT_JSON = Sys.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-              )
-            )
-          }
           deploy_with_retry <- function(attempts=3, wait_secs=30) {
             for (i in seq_len(attempts)) {
               result <- tryCatch({
