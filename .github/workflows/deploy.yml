@@ -24,7 +24,7 @@ jobs:
         run: |
           install.packages(c(
             "shiny", "dplyr", "readr", "ggplot2", "DT", "scales",
-            "googledrive", "googlesheets4", "gargle"
+            "googledrive", "googlesheets4", "gargle", "rsconnect"
           ))
         shell: Rscript {0}
 
