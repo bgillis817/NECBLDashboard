@@ -811,6 +811,63 @@ ui <- navbarPage(
         dataTableOutput("lb_team_pitching")
       )
     )
+  ),
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # SCOUTING REPORTS TAB
+  # ══════════════════════════════════════════════════════════════════════════
+  tabPanel("Scouting Reports",
+    sidebarLayout(
+      sidebarPanel(width=3,
+        tags$div(class="section-header","Report Settings"),
+        tags$hr(),
+
+        # Season
+        tags$div(class="season-toggle",
+          tags$button("2026",id="sr_2026",class="season-btn active",
+            onclick="Shiny.setInputValue('sr_season','2026',{priority:'event'})"),
+          tags$button("2025",id="sr_2025",class="season-btn",
+            onclick="Shiny.setInputValue('sr_season','2025',{priority:'event'})"),
+          tags$button("2024",id="sr_2024",class="season-btn",
+            onclick="Shiny.setInputValue('sr_season','2024',{priority:'event'})"),
+          tags$button("2023",id="sr_2023",class="season-btn",
+            onclick="Shiny.setInputValue('sr_season','2023',{priority:'event'})")
+        ),
+        br(),
+
+        # Report type
+        radioButtons("sr_type","Report Type",
+                     choices=c("Pitcher"="pitcher","Hitter"="hitter"),
+                     selected="pitcher", inline=TRUE),
+        tags$hr(),
+
+        # Team + player selection
+        uiOutput("sr_team_ui"),
+        uiOutput("sr_players_ui"),
+        fluidRow(
+          column(6, actionButton("sr_sel_all","All",  class="btn-default btn-sm")),
+          column(6, actionButton("sr_sel_none","Clear",class="btn-default btn-sm"))
+        ),
+        tags$hr(),
+
+        # Section checkboxes
+        tags$div(class="section-header",style="font-size:14px;","Sections to Include"),
+        uiOutput("sr_sections_ui"),
+        tags$hr(),
+
+        # Generate button
+        downloadButton("sr_download","Generate PDF",
+                       class="btn-primary",style="width:100%;"),
+        br(),br(),
+        uiOutput("sr_status_ui")
+      ),
+      mainPanel(width=9,
+        tags$div(class="section-header","Report Preview"),
+        tags$div(class="section-sub",
+                 "Preview shows first selected player. PDF will include all selected players."),
+        uiOutput("sr_preview_ui")
+      )
+    )
   )
 )
 
@@ -1629,8 +1686,604 @@ server <- function(input, output, session) {
   })
 
   # ==========================================================================
-  #  LEADERBOARDS
+  #  SCOUTING REPORTS
   # ==========================================================================
+
+  sr_season <- reactive({ input$sr_season %||% "2026" })
+
+  observeEvent(sr_season(), {
+    session$sendCustomMessage("setSeasonBtns",
+      list(prefix="sr", season=sr_season()))
+  })
+
+  # Pitcher / hitter section options
+  pitcher_sections <- c(
+    "Arsenal Table"          = "arsenal",
+    "Movement Chart"         = "movement",
+    "Release Points"         = "release",
+    "Heat Maps (vs RHH)"     = "heatmap_r",
+    "Heat Maps (vs LHH)"     = "heatmap_l",
+    "Heat Maps (Combined)"   = "heatmap_all",
+    "Velocity & Spin Table"  = "velo_spin",
+    "L/R Splits"             = "splits",
+    "Count Splits"           = "count_splits",
+    "Batted Ball Rates"      = "batted_ball",
+    "Pitch Sequencing Matrix"= "sequencing"
+  )
+
+  hitter_sections <- c(
+    "Stat Summary"           = "summary",
+    "Spray Chart"            = "spray",
+    "Plate Discipline Scatter"= "pd_scatter",
+    "Plate Discipline Stats" = "pd_stats",
+    "Heat Map (vs RHP)"      = "heatmap_r",
+    "Heat Map (vs LHP)"      = "heatmap_l",
+    "Heat Map (Combined)"    = "heatmap_all",
+    "L/R Splits Table"       = "splits",
+    "Pitch Type Splits"      = "pt_splits",
+    "Batted Ball Rates"      = "batted_ball",
+    "wOBA Trend"             = "woba_trend"
+  )
+
+  output$sr_sections_ui <- renderUI({
+    sections <- if (input$sr_type == "pitcher") pitcher_sections else hitter_sections
+    checkboxGroupInput("sr_sections", NULL,
+                       choices  = sections,
+                       selected = sections[1:4])
+  })
+
+  output$sr_team_ui <- renderUI({
+    req(!is.null(hitters_data()), !is.null(p_data_r()))
+    if (input$sr_type == "pitcher") {
+      teams <- p_data_r() %>%
+        filter(Season == as.integer(sr_season())) %>%
+        pull(PitcherTeamFull) %>% unique() %>% sort()
+    } else {
+      teams <- hitters_data() %>%
+        filter(Season == as.integer(sr_season())) %>%
+        pull(BatterTeamFull) %>% unique() %>% sort()
+    }
+    selectInput("sr_team","Select Team", choices=teams, selectize=TRUE)
+  })
+
+  output$sr_players_ui <- renderUI({
+    req(input$sr_team)
+    if (input$sr_type == "pitcher") {
+      players <- p_data_r() %>%
+        filter(Season==as.integer(sr_season()),
+               PitcherTeamFull==input$sr_team) %>%
+        pull(Pitcher) %>% unique() %>% sort()
+    } else {
+      players <- hitters_data() %>%
+        filter(Season==as.integer(sr_season()),
+               BatterTeamFull==input$sr_team) %>%
+        pull(Batter) %>% unique() %>% sort()
+    }
+    checkboxGroupInput("sr_players","Select Players",
+                       choices=players, selected=players)
+  })
+
+  observeEvent(input$sr_sel_all, {
+    req(input$sr_team)
+    if (input$sr_type == "pitcher") {
+      players <- p_data_r() %>%
+        filter(Season==as.integer(sr_season()),
+               PitcherTeamFull==input$sr_team) %>%
+        pull(Pitcher) %>% unique() %>% sort()
+    } else {
+      players <- hitters_data() %>%
+        filter(Season==as.integer(sr_season()),
+               BatterTeamFull==input$sr_team) %>%
+        pull(Batter) %>% unique() %>% sort()
+    }
+    updateCheckboxGroupInput(session,"sr_players",selected=players)
+  })
+  observeEvent(input$sr_sel_none,{
+    updateCheckboxGroupInput(session,"sr_players",selected=character(0))
+  })
+
+  output$sr_status_ui <- renderUI({
+    req(input$sr_players)
+    n <- length(input$sr_players)
+    s <- length(input$sr_sections %||% character(0))
+    tags$p(style="color:#8892b0;font-size:12px;",
+           paste0(n," player(s) · ",s," section(s) selected"))
+  })
+
+  # ── Helper: build one pitcher page as ggplot list ─────────────────────────
+  build_pitcher_plots <- function(pitcher_name, sections, p_df, p_seqs_df) {
+    d <- p_df %>% filter(Pitcher == pitcher_name)
+    if (nrow(d) == 0) return(list())
+
+    pitch_pal <- c(
+      Fastball="#333333","4-Seam Fastball"="#333333","Four-Seam"="#333333",
+      Sinker="#555555","Two-Seam"="#555555",Cutter="#888800",
+      Slider="#005588",Curveball="#660088",Sweeper="#006644",
+      Changeup="#008844",Splitter="#880044",Other="#999999"
+    )
+
+    plots <- list()
+
+    if ("arsenal" %in% sections) {
+      tbl <- d %>% group_by(Pitch=TaggedPitchType) %>%
+        summarise(
+          N=n(), Usage=paste0(round(n()/nrow(d)*100,1),"%"),
+          `Avg Velo`=round(mean(RelSpeed,na.rm=TRUE),1),
+          `Max Velo`=round(max(RelSpeed,na.rm=TRUE),1),
+          Spin=round(mean(SpinRate,na.rm=TRUE),0),
+          IVB=round(mean(InducedVertBreak,na.rm=TRUE),1),
+          HB=round(mean(HorzBreak,na.rm=TRUE),1),
+          `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
+          `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
+          .groups="drop"
+        ) %>% arrange(desc(N))
+      plots[["arsenal"]] <- list(type="table", data=tbl,
+                                  title=paste(pitcher_name,"— Arsenal"))
+    }
+
+    if ("movement" %in% sections) {
+      plots[["movement"]] <- list(type="plot",
+        plot=ggplot(d,aes(x=HorzBreak,y=InducedVertBreak,color=TaggedPitchType))+
+          geom_hline(yintercept=0,color="grey70",linewidth=.5)+
+          geom_vline(xintercept=0,color="grey70",linewidth=.5)+
+          geom_point(size=2,alpha=.6)+
+          stat_ellipse(aes(group=TaggedPitchType),level=.68,linewidth=.5,linetype="dashed")+
+          scale_color_manual(values=pitch_pal,na.value="grey60",name="Pitch")+
+          xlim(-25,25)+ylim(-25,25)+
+          labs(title=paste(pitcher_name,"— Movement"),
+               x="Horizontal Break (in)",y="Induced Vertical Break (in)")+
+          theme_bw(base_size=10)+theme(panel.grid.minor=element_blank())
+      )
+    }
+
+    if ("release" %in% sections) {
+      plots[["release"]] <- list(type="plot",
+        plot=ggplot(d,aes(x=RelSide,y=RelHeight,color=TaggedPitchType))+
+          geom_point(size=2,alpha=.6)+
+          scale_color_manual(values=pitch_pal,na.value="grey60",name="Pitch")+
+          xlim(-4,4)+ylim(2,7)+
+          labs(title=paste(pitcher_name,"— Release Points"),
+               x="Horizontal (ft)",y="Vertical (ft)")+
+          theme_bw(base_size=10)+theme(panel.grid.minor=element_blank())
+      )
+    }
+
+    # Heat maps
+    hm_fn <- function(d_sub, title_str) {
+      if (nrow(d_sub) < 5) return(NULL)
+      ggplot(d_sub,aes(x=PlateLocSide,y=PlateLocHeight))+
+        stat_density_2d(aes(fill=after_stat(density)),geom="raster",contour=FALSE)+
+        scale_fill_gradient(low="white",high="#cc0000",guide="none")+
+        annotate("rect",xmin=-1,xmax=1,ymin=1.6,ymax=3.4,
+                 fill=NA,color="black",linewidth=.7)+
+        ylim(1,4)+xlim(-1.8,1.8)+
+        labs(title=title_str,x="Horizontal",y="Vertical")+
+        theme_bw(base_size=10)+theme(panel.grid.minor=element_blank())
+    }
+    if ("heatmap_r"   %in% sections)
+      plots[["heatmap_r"]]   <- list(type="plot",
+        plot=hm_fn(d%>%filter(BatterSide=="Right"),paste(pitcher_name,"— Heat Map vs RHH")))
+    if ("heatmap_l"   %in% sections)
+      plots[["heatmap_l"]]   <- list(type="plot",
+        plot=hm_fn(d%>%filter(BatterSide=="Left"), paste(pitcher_name,"— Heat Map vs LHH")))
+    if ("heatmap_all" %in% sections)
+      plots[["heatmap_all"]] <- list(type="plot",
+        plot=hm_fn(d, paste(pitcher_name,"— Heat Map (Combined)")))
+
+    if ("splits" %in% sections) {
+      tbl <- d %>% group_by(Side=BatterSide) %>%
+        summarise(
+          BF=sum(PACheck,na.rm=TRUE),
+          `K%`=paste0(round(sum(StrikeoutCheck,na.rm=TRUE)/max(BF,1)*100,1),"%"),
+          `BB%`=paste0(round(sum(WalkCheck,na.rm=TRUE)/max(BF,1)*100,1),"%"),
+          `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
+          `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
+          `AVG`=sprintf("%.3f",ifelse(sum(ABCheck,na.rm=TRUE)>0,
+                                       sum(HCheck,na.rm=TRUE)/sum(ABCheck,na.rm=TRUE),NA)),
+          .groups="drop"
+        )
+      plots[["splits"]] <- list(type="table",data=tbl,
+                                 title=paste(pitcher_name,"— L/R Splits"))
+    }
+
+    if ("count_splits" %in% sections) {
+      tbl <- d %>% group_by(Count) %>%
+        summarise(
+          N=n(),
+          `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
+          `Zone%`=paste0(round(mean(ZoneCheck,na.rm=TRUE)*100,1),"%"),
+          `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
+          .groups="drop"
+        ) %>% arrange(Count)
+      plots[["count_splits"]] <- list(type="table",data=tbl,
+                                       title=paste(pitcher_name,"— Count Splits"))
+    }
+
+    if ("batted_ball" %in% sections) {
+      bbe <- d %>% filter(TaggedHitType%in%c("GroundBall","FlyBall","LineDrive","Popup"))
+      if (nrow(bbe) > 0) {
+        tbl <- bbe %>% group_by(Side=BatterSide) %>%
+          summarise(
+            BBE=n(),
+            `GB%`=paste0(round(sum(TaggedHitType=="GroundBall")/n()*100,1),"%"),
+            `FB%`=paste0(round(sum(TaggedHitType=="FlyBall")/n()*100,1),"%"),
+            `LD%`=paste0(round(sum(TaggedHitType=="LineDrive")/n()*100,1),"%"),
+            `PU%`=paste0(round(sum(TaggedHitType=="Popup")/n()*100,1),"%"),
+            `GB/FB`=as.character(round(sum(TaggedHitType=="GroundBall")/
+                                        max(sum(TaggedHitType=="FlyBall"),1),2)),
+            .groups="drop"
+          )
+        plots[["batted_ball"]] <- list(type="table",data=tbl,
+                                        title=paste(pitcher_name,"— Batted Ball"))
+      }
+    }
+
+    if ("velo_spin" %in% sections) {
+      tbl <- d %>% group_by(Pitch=TaggedPitchType) %>%
+        summarise(
+          `Avg Velo`=round(mean(RelSpeed,na.rm=TRUE),1),
+          `Max Velo`=round(max(RelSpeed,na.rm=TRUE),1),
+          `Min Velo`=round(min(RelSpeed,na.rm=TRUE),1),
+          `Avg Spin`=round(mean(SpinRate,na.rm=TRUE),0),
+          `Max Spin`=round(max(SpinRate,na.rm=TRUE),0),
+          .groups="drop"
+        )
+      plots[["velo_spin"]] <- list(type="table",data=tbl,
+                                    title=paste(pitcher_name,"— Velocity & Spin"))
+    }
+
+    Filter(Negate(is.null), plots)
+  }
+
+  # ── Helper: build one hitter page ─────────────────────────────────────────
+  build_hitter_plots <- function(batter_name, sections, h_df) {
+    d <- h_df %>% filter(Batter == batter_name)
+    if (nrow(d) == 0) return(list())
+
+    plots <- list()
+
+    if ("summary" %in% sections) {
+      pa  <- n_distinct(d$PA_count)
+      h   <- sum(d$PlayResult%in%c("Single","Double","Triple","HomeRun"))
+      bb  <- sum(d$PlayResult=="Walk")
+      hbp <- sum(d$PlayResult=="HitByPitch")
+      ab  <- pa-bb-hbp
+      tb  <- sum(d$PlayResult=="Single")+2*sum(d$PlayResult=="Double")+
+             3*sum(d$PlayResult=="Triple")+4*sum(d$PlayResult=="HomeRun")
+      tbl <- data.frame(
+        Stat=c("PA","AB","H","2B","3B","HR","BB","HBP","BA","OBP","SLG","OPS","wOBA"),
+        Value=c(pa,ab,h,
+                sum(d$PlayResult=="Double"),sum(d$PlayResult=="Triple"),
+                sum(d$PlayResult=="HomeRun"),bb,hbp,
+                sprintf("%.3f",ifelse(ab>0,h/ab,NA)),
+                sprintf("%.3f",ifelse(pa>0,(h+bb+hbp)/pa,NA)),
+                sprintf("%.3f",ifelse(ab>0,tb/ab,NA)),
+                sprintf("%.3f",ifelse(ab>0,(h+bb+hbp)/pa+tb/ab,NA)),
+                sprintf("%.3f",sum(d$wOBA_contribution,na.rm=TRUE)/pa))
+      )
+      plots[["summary"]] <- list(type="table",data=tbl,
+                                  title=paste(batter_name,"— Season Stats"))
+    }
+
+    if ("spray" %in% sections) {
+      sd <- d %>%
+        filter(!is.na(LastTrackedDistance),!is.na(Bearing),!is.na(PlayResult)) %>%
+        mutate(bearing_rad=Bearing*pi/180,
+               x=LastTrackedDistance*sin(bearing_rad),
+               y=LastTrackedDistance*cos(bearing_rad))
+      if (nrow(sd) > 0) {
+        fl_x <- 330*sin(45*pi/180); fl_y <- fl_x
+        arc_df <- function(r,a1,a2,n=200){
+          a<-seq(a1,a2,length.out=n)*pi/180
+          data.frame(x=r*sin(a),y=r*cos(a))
+        }
+        wall_poly <- rbind(
+          data.frame(x=0,y=0),
+          data.frame(x=-fl_x,y=fl_y),
+          arc_df(330,-45,-20),arc_df(400,-20,20),arc_df(330,20,45),
+          data.frame(x=fl_x,y=fl_y)
+        )
+        bases <- data.frame(bx=c(0,90/sqrt(2),0,-90/sqrt(2),0),
+                             by=c(0,90/sqrt(2),2*90/sqrt(2),90/sqrt(2),0))
+        col_map <- c(Single="#1a7a4a",Double="#1a4a7a",HomeRun="#aa0000",
+                     Out="grey60",Triple="#6a1a7a",FieldersChoice="#aa6600",
+                     Sacrifice="grey70",Error="#884400")
+        plots[["spray"]] <- list(type="plot",
+          plot=ggplot()+
+            geom_polygon(data=wall_poly,aes(x=x,y=y),fill="#e8f5e9",color=NA)+
+            geom_path(data=rbind(data.frame(x=-fl_x,y=fl_y),arc_df(330,-45,-20),
+                                  arc_df(400,-20,20),arc_df(330,20,45),
+                                  data.frame(x=fl_x,y=fl_y)),
+                      aes(x=x,y=y),color="grey40",linewidth=1)+
+            geom_segment(aes(x=0,y=0,xend=-fl_x,yend=fl_y),color="grey40")+
+            geom_segment(aes(x=0,y=0,xend= fl_x,yend=fl_y),color="grey40")+
+            geom_path(data=bases,aes(x=bx,y=by),color="grey30")+
+            annotate("text",x=0,y=412,label="400",size=3,color="grey40")+
+            annotate("text",x=-fl_x-12,y=fl_y+5,label="330",size=3,color="grey40")+
+            annotate("text",x= fl_x+12,y=fl_y+5,label="330",size=3,color="grey40")+
+            geom_point(data=sd,aes(x=x,y=y,color=PlayResult),size=3,alpha=.8)+
+            scale_color_manual(values=col_map,name="Result")+
+            coord_fixed(xlim=c(-280,280),ylim=c(-10,420))+
+            labs(title=paste(batter_name,"— Spray Chart"))+
+            theme_bw(base_size=10)+
+            theme(axis.text=element_blank(),axis.title=element_blank(),
+                  panel.grid=element_blank(),axis.ticks=element_blank())
+        )
+      }
+    }
+
+    if ("pd_stats" %in% sections) {
+      pd <- d %>% filter(!is.na(PlateLocSide),!is.na(PlateLocHeight)) %>%
+        mutate(InZone=dplyr::between(PlateLocHeight,1.59,3.41)&
+                      dplyr::between(PlateLocSide,-1,1),
+               IsSwing=PitchCall%in%c("FoulBall","StrikeSwinging","InPlay"),
+               IsWhiff=PitchCall=="StrikeSwinging")
+      if (nrow(pd) > 0) {
+        tbl <- data.frame(
+          Stat=c("Zone Swing%","Zone Contact%","Whiff%","Chase%","O-Swing%","Z-Contact%"),
+          Value=c(
+            paste0(round(mean(pd$IsSwing[pd$InZone],na.rm=TRUE)*100,1),"%"),
+            {zs=pd%>%filter(InZone,IsSwing);paste0(round(mean(zs$PitchCall%in%c("FoulBall","InPlay"),na.rm=TRUE)*100,1),"%")},
+            {sw=sum(pd$IsSwing);paste0(round(sum(pd$IsWhiff)/max(sw,1)*100,1),"%")},
+            {oz=pd%>%filter(!InZone);paste0(round(mean(oz$IsSwing,na.rm=TRUE)*100,1),"%")},
+            paste0(round(mean(pd$IsSwing[!pd$InZone],na.rm=TRUE)*100,1),"%"),
+            {zs=pd%>%filter(InZone,IsSwing);paste0(round(mean(zs$PitchCall=="InPlay",na.rm=TRUE)*100,1),"%")}
+          )
+        )
+        plots[["pd_stats"]] <- list(type="table",data=tbl,
+                                     title=paste(batter_name,"— Plate Discipline"))
+      }
+    }
+
+    if ("pd_scatter" %in% sections) {
+      pd <- d %>%
+        filter(!is.na(PlateLocSide),!is.na(PlateLocHeight)) %>%
+        mutate(
+          InZone  = dplyr::between(PlateLocHeight,1.59,3.41)&dplyr::between(PlateLocSide,-1,1),
+          IsSwing = PitchCall%in%c("FoulBall","StrikeSwinging","InPlay"),
+          IsWhiff = PitchCall=="StrikeSwinging",
+          PD_side = -PlateLocSide,
+          Outcome = dplyr::case_when(
+            PitchCall%in%c("FoulBall","InPlay")&InZone ~ "Contact (zone)",
+            IsWhiff&InZone                              ~ "Whiff (zone)",
+            PitchCall=="StrikeCalled"                   ~ "Called Strike",
+            PitchCall%in%c("BallCalled","HitByPitch")&InZone ~ "Ball (zone)",
+            IsSwing&!InZone                             ~ "Chase",
+            TRUE                                        ~ "Take (out of zone)"
+          )
+        )
+      outcome_pal <- c("Contact (zone)"="#1a7a4a","Whiff (zone)"="#aa0000",
+                       "Called Strike"="#886600","Ball (zone)"="#1a4a7a",
+                       "Chase"="#aa5500","Take (out of zone)"="grey70")
+      outcome_shape <- c("Contact (zone)"=16,"Whiff (zone)"=4,"Called Strike"=16,
+                         "Ball (zone)"=16,"Chase"=16,"Take (out of zone)"=1)
+      plots[["pd_scatter"]] <- list(type="plot",
+        plot=ggplot(pd,aes(x=PD_side,y=PlateLocHeight,color=Outcome,shape=Outcome))+
+          annotate("rect",xmin=-1,xmax=1,ymin=1.59,ymax=3.41,fill=NA,color="black",linewidth=.8)+
+          annotate("segment",x=c(-1/3,1/3,-1,-1),xend=c(-1/3,1/3,1,1),
+                   y=c(1.59,1.59,(3.41-1.59)/3+1.59,(3.41-1.59)*2/3+1.59),
+                   yend=c(3.41,3.41,(3.41-1.59)/3+1.59,(3.41-1.59)*2/3+1.59),
+                   color="grey80",linewidth=.3)+
+          geom_jitter(size=2,alpha=.7,width=.01,height=.01)+
+          scale_color_manual(values=outcome_pal,name="Outcome")+
+          scale_shape_manual(values=outcome_shape,name="Outcome")+
+          xlim(-2.2,2.2)+ylim(0.8,4.2)+
+          labs(title=paste(batter_name,"— Plate Discipline"),
+               x="Horizontal (Hitter's View)",y="Vertical (ft)")+
+          theme_bw(base_size=10)+theme(panel.grid.minor=element_blank())
+      )
+    }
+
+    hm_h_fn <- function(d_sub, title_str) {
+      if (nrow(d_sub) < 5) return(NULL)
+      ggplot(d_sub,aes(x=-PlateLocSide,y=PlateLocHeight))+
+        stat_density_2d(aes(fill=after_stat(density)),geom="raster",contour=FALSE)+
+        scale_fill_gradient(low="white",high="#cc0000",guide="none")+
+        annotate("rect",xmin=-1,xmax=1,ymin=1.6,ymax=3.4,
+                 fill=NA,color="black",linewidth=.7)+
+        ylim(1,4)+xlim(-1.8,1.8)+
+        labs(title=title_str,x="Horizontal (Hitter's View)",y="Vertical")+
+        theme_bw(base_size=10)+theme(panel.grid.minor=element_blank())
+    }
+    if ("heatmap_r"   %in% sections)
+      plots[["heatmap_r"]]   <- list(type="plot",
+        plot=hm_h_fn(d%>%filter(!is.na(PlateLocSide),!is.na(PlateLocHeight),
+                                  PitcherThrows=="Right"),
+                     paste(batter_name,"— Heat Map vs RHP")))
+    if ("heatmap_l"   %in% sections)
+      plots[["heatmap_l"]]   <- list(type="plot",
+        plot=hm_h_fn(d%>%filter(!is.na(PlateLocSide),!is.na(PlateLocHeight),
+                                  PitcherThrows=="Left"),
+                     paste(batter_name,"— Heat Map vs LHP")))
+    if ("heatmap_all" %in% sections)
+      plots[["heatmap_all"]] <- list(type="plot",
+        plot=hm_h_fn(d%>%filter(!is.na(PlateLocSide),!is.na(PlateLocHeight)),
+                     paste(batter_name,"— Heat Map (Combined)")))
+
+    if ("splits" %in% sections) {
+      tbl <- d %>% group_by(Throws=PitcherThrows) %>%
+        summarise(
+          PA=n(),H=sum(PlayResult%in%c("Single","Double","Triple","HomeRun")),
+          HR=sum(PlayResult=="HomeRun"),BB=sum(PlayResult=="Walk"),
+          AB=PA-BB-sum(PlayResult=="HitByPitch"),
+          BA=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
+          OBP=sprintf("%.3f",ifelse(PA>0,(H+BB+sum(PlayResult=="HitByPitch"))/PA,NA)),
+          wOBA=sprintf("%.3f",sum(wOBA_contribution,na.rm=TRUE)/PA),
+          .groups="drop"
+        )
+      plots[["splits"]] <- list(type="table",data=tbl,
+                                 title=paste(batter_name,"— L/R Splits"))
+    }
+
+    if ("pt_splits" %in% sections) {
+      tbl <- d %>% group_by(PitchType=TaggedPitchType) %>%
+        summarise(
+          PA=n(),H=sum(PlayResult%in%c("Single","Double","Triple","HomeRun")),
+          HR=sum(PlayResult=="HomeRun"),BB=sum(PlayResult=="Walk"),
+          AB=PA-BB-sum(PlayResult=="HitByPitch"),
+          BA=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
+          wOBA=sprintf("%.3f",sum(wOBA_contribution,na.rm=TRUE)/PA),
+          .groups="drop"
+        ) %>% arrange(desc(PA))
+      plots[["pt_splits"]] <- list(type="table",data=tbl,
+                                    title=paste(batter_name,"— Splits by Pitch Type"))
+    }
+
+    if ("batted_ball" %in% sections) {
+      bbe <- d %>% filter(TaggedHitType%in%c("GroundBall","FlyBall","LineDrive","Popup"))
+      if (nrow(bbe) > 0) {
+        tbl <- data.frame(
+          Stat=c("BBE","GB%","FB%","LD%","PU%","GB/FB"),
+          Value=c(nrow(bbe),
+                  paste0(round(sum(bbe$TaggedHitType=="GroundBall")/nrow(bbe)*100,1),"%"),
+                  paste0(round(sum(bbe$TaggedHitType=="FlyBall")/nrow(bbe)*100,1),"%"),
+                  paste0(round(sum(bbe$TaggedHitType=="LineDrive")/nrow(bbe)*100,1),"%"),
+                  paste0(round(sum(bbe$TaggedHitType=="Popup")/nrow(bbe)*100,1),"%"),
+                  as.character(round(sum(bbe$TaggedHitType=="GroundBall")/
+                                     max(sum(bbe$TaggedHitType=="FlyBall"),1),2)))
+        )
+        plots[["batted_ball"]] <- list(type="table",data=tbl,
+                                        title=paste(batter_name,"— Batted Ball"))
+      }
+    }
+
+    Filter(Negate(is.null), plots)
+  }
+
+  # ── Preview (first selected player) ──────────────────────────────────────
+  output$sr_preview_ui <- renderUI({
+    req(input$sr_players, length(input$sr_players)>0,
+        input$sr_sections, length(input$sr_sections)>0)
+    player <- input$sr_players[1]
+    sections <- input$sr_sections
+
+    if (input$sr_type == "pitcher") {
+      d <- p_data_r() %>% filter(Season==as.integer(sr_season()))
+      plots <- build_pitcher_plots(player, sections, d, p_seqs_r())
+    } else {
+      d <- hitters_data() %>% filter(Season==as.integer(sr_season()))
+      plots <- build_hitter_plots(player, sections, d)
+    }
+
+    if (length(plots) == 0)
+      return(tags$p(style="color:#8892b0;","No data available for this player."))
+
+    items <- lapply(plots, function(item) {
+      if (item$type == "table") {
+        tagList(
+          tags$h4(style="color:#fff;font-weight:700;margin:16px 0 8px;",
+                  item$title),
+          renderTable(item$data, striped=TRUE, hover=TRUE)
+        )
+      } else if (item$type == "plot" && !is.null(item$plot)) {
+        tagList(
+          renderPlot(item$plot, height=320)
+        )
+      }
+    })
+    tagList(
+      tags$h3(style="color:#ff4655;font-weight:700;margin-bottom:16px;", player),
+      tagList(items)
+    )
+  })
+
+  # ── PDF download ──────────────────────────────────────────────────────────
+  output$sr_download <- downloadHandler(
+    filename = function() {
+      paste0("NECBL_ScoutingReport_",input$sr_team,"_",
+             sr_season(),"_",format(Sys.Date(),"%Y%m%d"),".pdf")
+    },
+    content = function(file) {
+      req(input$sr_players, length(input$sr_players)>0)
+
+      sections <- input$sr_sections %||% character(0)
+      if (length(sections) == 0) {
+        showNotification("Select at least one section.", type="warning"); return()
+      }
+
+      if (input$sr_type == "pitcher") {
+        d_all <- p_data_r() %>% filter(Season==as.integer(sr_season()))
+      } else {
+        d_all <- hitters_data() %>% filter(Season==as.integer(sr_season()))
+      }
+
+      # Build temp R Markdown and knit to PDF
+      tmp_rmd <- tempfile(fileext=".Rmd")
+      tmp_dir <- dirname(tmp_rmd)
+
+      # Write Rmd
+      rmd_lines <- c(
+        "---",
+        paste0('title: "NECBL Scouting Report — ',input$sr_team,' (',sr_season(),')"'),
+        'output:',
+        '  pdf_document:',
+        '    latex_engine: xelatex',
+        '    toc: false',
+        '    fig_width: 6',
+        '    fig_height: 3.5',
+        'geometry: margin=1in',
+        'fontsize: 10pt',
+        "---",
+        "",
+        "```{r setup, include=FALSE}",
+        "knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,",
+        "                      fig.width=6, fig.height=3.5)",
+        "library(ggplot2)",
+        "library(dplyr)",
+        "library(knitr)",
+        "```",
+        ""
+      )
+
+      for (player in input$sr_players) {
+        rmd_lines <- c(rmd_lines,
+          paste0("\\newpage"),
+          paste0("# ", player),
+          paste0("**Team:** ", input$sr_team,
+                 " | **Season:** ", sr_season()),
+          ""
+        )
+
+        if (input$sr_type == "pitcher") {
+          plots <- build_pitcher_plots(player, sections, d_all, p_seqs_r())
+        } else {
+          plots <- build_hitter_plots(player, sections, d_all)
+        }
+
+        for (nm in names(plots)) {
+          item <- plots[[nm]]
+          obj_name <- paste0("obj_", gsub("[^a-zA-Z0-9]","_",player), "_", nm)
+
+          if (item$type == "table") {
+            assign(obj_name, item$data, envir=.GlobalEnv)
+            rmd_lines <- c(rmd_lines,
+              paste0("## ", item$title),
+              paste0("```{r}"),
+              paste0("kable(", obj_name, ", format='latex', booktabs=TRUE)"),
+              "```",
+              ""
+            )
+          } else if (item$type == "plot" && !is.null(item$plot)) {
+            assign(obj_name, item$plot, envir=.GlobalEnv)
+            rmd_lines <- c(rmd_lines,
+              paste0("```{r fig.", obj_name, ", fig.height=3.5}"),
+              paste0("print(", obj_name, ")"),
+              "```",
+              ""
+            )
+          }
+        }
+      }
+
+      writeLines(rmd_lines, tmp_rmd)
+
+      tryCatch({
+        rmarkdown::render(tmp_rmd, output_file=file, quiet=TRUE)
+      }, error=function(e) {
+        showNotification(paste("PDF error:", e$message), type="error", duration=8)
+      })
+    }
+  )
   output$lb_hitters <- renderDataTable({
     req(!is.null(hitters_data()))
     d <- hitters_data()%>%filter(Season==as.integer(lb_season()))
