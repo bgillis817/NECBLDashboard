@@ -5,7 +5,6 @@
 #  Dark theme · pitch sequencing · count & handedness heat maps
 # ============================================================================
 
-
 library(shiny)
 library(dplyr)
 library(readr)
