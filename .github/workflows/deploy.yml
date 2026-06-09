@@ -8,6 +8,10 @@ on:
     # Runs every night at 4am ET (8am UTC)
     - cron: '0 8 * * *'
 
+concurrency:
+  group: deploy-necbl
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
