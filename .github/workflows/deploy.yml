@@ -32,8 +32,8 @@ jobs:
         run: |
           install.packages(c(
             "shiny", "dplyr", "readr", "ggplot2", "DT", "scales",
-            "googledrive", "googlesheets4", "gargle", "rsconnect",
-            "rmarkdown", "knitr"
+            "googledrive", "googlesheets4", "gargle", "jsonlite",
+            "rsconnect", "rmarkdown", "knitr"
           ))
         shell: Rscript {0}
 
