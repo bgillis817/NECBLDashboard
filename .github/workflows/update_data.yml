@@ -1,0 +1,117 @@
+name: Update NECBL Data
+
+on:
+  schedule:
+    # Runs every night at 2am ET (6am UTC) — before the 4am deploy
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # allows manual trigger from Actions tab
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install pandas google-api-python-client google-auth
+
+      - name: Update NECBL_All.csv from Drive
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FOLDER_ID: "1haJdctNyLTx81GXlvCdBRDSWKrDAlKAw"
+        run: |
+          python3 << 'EOF'
+          import os
+          import io
+          import json
+          import pandas as pd
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaIoBaseDownload
+
+          # Auth
+          svc_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+          creds_dict = json.loads(svc_json)
+          creds = service_account.Credentials.from_service_account_info(
+              creds_dict,
+              scopes=["https://www.googleapis.com/auth/drive.readonly"]
+          )
+          service = build("drive", "v3", credentials=creds)
+          folder_id = os.environ["DRIVE_FOLDER_ID"]
+
+          # Get all CSV files in folder
+          results = service.files().list(
+              q=f"'{folder_id}' in parents and mimeType='text/csv' and trashed=false",
+              fields="files(id, name, modifiedTime)",
+              pageSize=1000
+          ).execute()
+          files = results.get("files", [])
+          print(f"Found {len(files)} CSV files in Drive")
+
+          # Load existing combined file if it exists
+          existing_path = "NECBL_All.csv"
+          if os.path.exists(existing_path):
+              existing = pd.read_csv(existing_path, low_memory=False)
+              # Track which filenames are already loaded via a sidecar file
+              loaded_path = ".loaded_files.txt"
+              if os.path.exists(loaded_path):
+                  with open(loaded_path) as f:
+                      loaded_names = set(f.read().splitlines())
+              else:
+                  loaded_names = set()
+              print(f"Existing rows: {len(existing)} | Already loaded files: {len(loaded_names)}")
+          else:
+              existing = pd.DataFrame()
+              loaded_names = set()
+              print("No existing file — loading all files")
+
+          # Download only new files
+          new_dfs = []
+          new_names = []
+          for file in files:
+              if file["name"] in loaded_names:
+                  continue
+              try:
+                  request = service.files().get_media(fileId=file["id"])
+                  fh = io.BytesIO()
+                  downloader = MediaIoBaseDownload(fh, request)
+                  done = False
+                  while not done:
+                      _, done = downloader.next_chunk()
+                  fh.seek(0)
+                  df = pd.read_csv(fh, low_memory=False)
+                  new_dfs.append(df)
+                  new_names.append(file["name"])
+                  print(f"  + {file['name']} ({len(df)} rows)")
+              except Exception as e:
+                  print(f"  ! Skipped {file['name']}: {e}")
+
+          if len(new_dfs) == 0:
+              print("No new files to add — nothing to update")
+          else:
+              # Append new data
+              combined = pd.concat([existing] + new_dfs, ignore_index=True)
+              combined.to_csv(existing_path, index=False)
+              print(f"Updated NECBL_All.csv: {len(combined)} total rows (+{sum(len(d) for d in new_dfs)} new)")
+
+              # Update loaded files tracker
+              all_loaded = loaded_names | set(new_names)
+              with open(".loaded_files.txt", "w") as f:
+                  f.write("\n".join(sorted(all_loaded)))
+
+          EOF
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add NECBL_All.csv .loaded_files.txt || true
+          git diff --staged --quiet || git commit -m "Auto-update NECBL data $(date +'%Y-%m-%d')"
+          git push
