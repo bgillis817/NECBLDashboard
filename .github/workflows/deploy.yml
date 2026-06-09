@@ -33,9 +33,8 @@ jobs:
           install.packages(c(
             "shiny", "dplyr", "readr", "ggplot2", "DT", "scales",
             "googledrive", "googlesheets4", "gargle", "rsconnect",
-            "rmarkdown", "knitr", "tinytex"
+            "rmarkdown", "knitr"
           ))
-          tinytex::install_tinytex()
         shell: Rscript {0}
 
       - name: Deploy to shinyapps.io
