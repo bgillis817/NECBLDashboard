@@ -2163,7 +2163,8 @@ server <- function(input, output, session) {
   # ── PDF download ──────────────────────────────────────────────────────────
   output$sr_download <- downloadHandler(
     filename = function() {
-      paste0("NECBL_ScoutingReport_",input$sr_team,"_",
+      paste0("NECBL_ScoutingReport_",
+             gsub(" ","_",input$sr_team),"_",
              sr_season(),"_",format(Sys.Date(),"%Y%m%d"),".pdf")
     },
     content = function(file) {
@@ -2180,78 +2181,85 @@ server <- function(input, output, session) {
         d_all <- hitters_data() %>% filter(Season==as.integer(sr_season()))
       }
 
-      # Build temp R Markdown and knit to PDF
-      tmp_rmd <- tempfile(fileext=".Rmd")
-      tmp_dir <- dirname(tmp_rmd)
+      # Build all player data and save to RDS
+      tmp_dir  <- tempdir()
+      rds_path <- file.path(tmp_dir, "sr_data.rds")
+      tmp_rmd  <- file.path(tmp_dir, "report.Rmd")
 
-      # Write Rmd
+      all_player_data <- lapply(input$sr_players, function(player) {
+        if (input$sr_type == "pitcher") {
+          build_pitcher_plots(player, sections, d_all, p_seqs_r())
+        } else {
+          build_hitter_plots(player, sections, d_all)
+        }
+      })
+      names(all_player_data) <- input$sr_players
+      saveRDS(all_player_data, rds_path)
+
+      # Write Rmd that loads from RDS
       rmd_lines <- c(
         "---",
-        paste0('title: "NECBL Scouting Report — ',input$sr_team,' (',sr_season(),')"'),
+        paste0('title: "NECBL Scouting Report — ',
+               gsub('"',"'",input$sr_team),' (',sr_season(),')"'),
         'output:',
         '  pdf_document:',
         '    latex_engine: xelatex',
         '    toc: false',
-        '    fig_width: 6',
-        '    fig_height: 3.5',
-        'geometry: margin=1in',
+        '    fig_width: 6.5',
+        '    fig_height: 3.8',
+        'geometry: margin=0.75in',
         'fontsize: 10pt',
         "---",
         "",
         "```{r setup, include=FALSE}",
         "knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,",
-        "                      fig.width=6, fig.height=3.5)",
+        "                      fig.width=6.5, fig.height=3.8)",
         "library(ggplot2)",
         "library(dplyr)",
         "library(knitr)",
+        paste0('all_data <- readRDS("', rds_path, '")'),
         "```",
         ""
       )
 
-      for (player in input$sr_players) {
+      for (pi in seq_along(input$sr_players)) {
+        player <- input$sr_players[pi]
+        safe_p <- gsub("[^a-zA-Z0-9]","_", player)
+
+        if (pi > 1) rmd_lines <- c(rmd_lines, "\\newpage", "")
+
         rmd_lines <- c(rmd_lines,
-          paste0("\\newpage"),
           paste0("# ", player),
-          paste0("**Team:** ", input$sr_team,
-                 " | **Season:** ", sr_season()),
+          paste0("**Team:** ", input$sr_team, " | **Season:** ", sr_season()),
           ""
         )
 
-        if (input$sr_type == "pitcher") {
-          plots <- build_pitcher_plots(player, sections, d_all, p_seqs_r())
-        } else {
-          plots <- build_hitter_plots(player, sections, d_all)
-        }
-
-        for (nm in names(plots)) {
-          item <- plots[[nm]]
-          obj_name <- paste0("obj_", gsub("[^a-zA-Z0-9]","_",player), "_", nm)
-
-          if (item$type == "table") {
-            assign(obj_name, item$data, envir=.GlobalEnv)
-            rmd_lines <- c(rmd_lines,
-              paste0("## ", item$title),
-              paste0("```{r}"),
-              paste0("kable(", obj_name, ", format='latex', booktabs=TRUE)"),
-              "```",
-              ""
-            )
-          } else if (item$type == "plot" && !is.null(item$plot)) {
-            assign(obj_name, item$plot, envir=.GlobalEnv)
-            rmd_lines <- c(rmd_lines,
-              paste0("```{r fig.", obj_name, ", fig.height=3.5}"),
-              paste0("print(", obj_name, ")"),
-              "```",
-              ""
-            )
-          }
-        }
+        rmd_lines <- c(rmd_lines,
+          paste0("```{r player_", safe_p, ", results='asis'}"),
+          paste0("plots <- all_data[['", player, "']]"),
+          "for (nm in names(plots)) {",
+          "  item <- plots[[nm]]",
+          "  if (item$type == 'table' && !is.null(item$data)) {",
+          "    cat('\\n\\n##', item$title, '\\n\\n')",
+          "    print(kable(item$data, format='latex', booktabs=TRUE,",
+          "               linesep=''))",
+          "    cat('\\n\\n')",
+          "  } else if (item$type == 'plot' && !is.null(item$plot)) {",
+          "    print(item$plot)",
+          "    cat('\\n\\n')",
+          "  }",
+          "}",
+          "```",
+          ""
+        )
       }
 
       writeLines(rmd_lines, tmp_rmd)
 
       tryCatch({
-        rmarkdown::render(tmp_rmd, output_file=file, quiet=TRUE)
+        rmarkdown::render(tmp_rmd, output_file=file,
+                          envir=new.env(parent=globalenv()),
+                          quiet=TRUE)
       }, error=function(e) {
         showNotification(paste("PDF error:", e$message), type="error", duration=8)
       })
