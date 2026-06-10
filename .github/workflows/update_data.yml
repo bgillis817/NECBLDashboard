@@ -27,7 +27,7 @@ jobs:
       - name: Update NECBL_All.csv from Drive
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          DRIVE_FOLDER_ID: "1haJdctNyLTx81GXlvCdBRDSWKrDAlKAw"
+          DRIVE_FOLDER_ID: "1XDTUHKt_B1r4HiJ3jdY6uytz9Ttp_Dgo"
         run: |
           python3 << 'EOF'
           import os
@@ -101,20 +101,9 @@ jobs:
               # Append new data
               combined = pd.concat([existing] + new_dfs, ignore_index=True)
 
-              # Keep only 2025-2026 and essential columns
+              # Keep only 2025-2026
               combined['Date'] = pd.to_datetime(combined['Date'], errors='coerce')
               combined = combined[combined['Date'].dt.year >= 2025]
-
-              keep_cols = [
-                'Date','Pitcher','PitcherTeam','Batter','BatterTeam','BatterSide',
-                'PitcherThrows','TaggedPitchType','PitchCall','PlayResult','KorBB',
-                'TaggedHitType','RelSpeed','SpinRate','InducedVertBreak','HorzBreak',
-                'RelHeight','RelSide','PlateLocHeight','PlateLocSide',
-                'ExitSpeed','Angle','Bearing','LastTrackedDistance',
-                'Balls','Strikes','PitchNo','Inning','Outs'
-              ]
-              keep_cols = [c for c in keep_cols if c in combined.columns]
-              combined = combined[keep_cols]
 
               combined.to_csv(existing_path, index=False)
               print(f"Updated NECBL_All.csv: {len(combined)} rows, {combined['Date'].dt.year.value_counts().to_dict()}")
