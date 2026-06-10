@@ -100,8 +100,24 @@ jobs:
           else:
               # Append new data
               combined = pd.concat([existing] + new_dfs, ignore_index=True)
+
+              # Keep only 2025-2026 and essential columns
+              combined['Date'] = pd.to_datetime(combined['Date'], errors='coerce')
+              combined = combined[combined['Date'].dt.year >= 2025]
+
+              keep_cols = [
+                'Date','Pitcher','PitcherTeam','Batter','BatterTeam','BatterSide',
+                'PitcherThrows','TaggedPitchType','PitchCall','PlayResult','KorBB',
+                'TaggedHitType','RelSpeed','SpinRate','InducedVertBreak','HorzBreak',
+                'RelHeight','RelSide','PlateLocHeight','PlateLocSide',
+                'ExitSpeed','Angle','Bearing','LastTrackedDistance',
+                'Balls','Strikes','PitchNo','Inning','Outs'
+              ]
+              keep_cols = [c for c in keep_cols if c in combined.columns]
+              combined = combined[keep_cols]
+
               combined.to_csv(existing_path, index=False)
-              print(f"Updated NECBL_All.csv: {len(combined)} total rows (+{sum(len(d) for d in new_dfs)} new)")
+              print(f"Updated NECBL_All.csv: {len(combined)} rows, {combined['Date'].dt.year.value_counts().to_dict()}")
 
               # Update loaded files tracker
               all_loaded = loaded_names | set(new_names)
