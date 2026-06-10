@@ -11,70 +11,23 @@ library(readr)
 library(ggplot2)
 library(DT)
 library(scales)
-library(googledrive)
-library(googlesheets4)
-library(gargle)
-library(jsonlite)
+library(rmarkdown)
+library(knitr)
 
 # ── Null coalesce ─────────────────────────────────────────────────────────────
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
 
-# ── Google Drive folder ───────────────────────────────────────────────────────
-DRIVE_FOLDER_ID <- "1haJdctNyLTx81GXlvCdBRDSWKrDAlKAw"
+# ── Single combined CSV on GitHub ─────────────────────────────────────────────
+NECBL_CSV_URL <- "https://raw.githubusercontent.com/bgillis817/NECBLDashboard/main/NECBL_All.csv"
 
-# Authenticate using service account — bundled file takes priority over env var
-auth_drive <- function() {
-  # Try bundled file first (written by GitHub Actions during deploy)
-  bundled <- "service_account.json"
-  if (file.exists(bundled)) {
-    tryCatch({
-      googledrive::drive_auth(path = bundled)
-      message("Drive auth successful (bundled file)")
-      return(invisible(TRUE))
-    }, error = function(e) {
-      message("Bundled auth error: ", e$message)
-    })
-  }
-  # Fall back to env var
-  svc_json <- Sys.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-  if (nchar(svc_json) > 10) {
-    tryCatch({
-      tmp <- tempfile(fileext = ".json")
-      writeLines(svc_json, tmp)
-      googledrive::drive_auth(path = tmp)
-      message("Drive auth successful (env var)")
-    }, error = function(e) {
-      message("Drive auth error: ", e$message)
-      googledrive::drive_deauth()
-    })
-  } else {
-    message("No service account JSON found")
-    googledrive::drive_deauth()
-  }
-}
-
-# ── Load all CSVs from Drive folder ──────────────────────────────────────────
-load_drive_data <- function() {
+load_all_pitches <- function() {
+  message("Loading NECBL_All.csv from GitHub...")
   tryCatch({
-    auth_drive()
-    files <- googledrive::drive_ls(googledrive::as_id(DRIVE_FOLDER_ID),
-                                   type = "csv")
-    if (nrow(files) == 0) return(NULL)
-
-    all_dfs <- lapply(seq_len(nrow(files)), function(i) {
-      tryCatch({
-        tmp <- tempfile(fileext = ".csv")
-        googledrive::drive_download(googledrive::as_id(files$id[i]),
-                                    path = tmp, overwrite = TRUE)
-        df <- readr::read_csv(tmp, show_col_types = FALSE)
-        unlink(tmp)
-        df
-      }, error = function(e) { message("Skip file: ", files$name[i]); NULL })
-    })
-
-    dplyr::bind_rows(Filter(Negate(is.null), all_dfs))
+    df <- readr::read_csv(NECBL_CSV_URL, show_col_types=FALSE)
+    message("Loaded ", nrow(df), " rows")
+    df
   }, error = function(e) {
-    message("Drive load error: ", e$message)
+    message("Load error: ", e$message)
     NULL
   })
 }
@@ -271,8 +224,8 @@ process_pitchers <- function(df) {
 .raw_cache$last_loaded        <- NULL
 
 load_and_cache <- function() {
-  message("Loading data from Google Drive...")
-  raw <- load_drive_data()
+  message("Loading data from GitHub...")
+  raw <- load_all_pitches()
   .raw_cache$raw_all            <- raw
   .raw_cache$hitters_processed  <- process_hitters(raw)
   pit                           <- process_pitchers(raw)
