@@ -2146,11 +2146,13 @@ server <- function(input, output, session) {
         tagList(
           tags$h4(style="color:#fff;font-weight:700;margin:16px 0 8px;",
                   item$title),
-          renderTable(item$data, striped=TRUE, hover=TRUE)
+          DT::renderDataTable(
+            DT::datatable(item$data, options=dt_opts, rownames=FALSE)
+          )
         )
       } else if (item$type == "plot" && !is.null(item$plot)) {
         tagList(
-          renderPlot(item$plot, height=320)
+          renderPlot(item$plot, height=320, bg="#0f1117")
         )
       }
     })
@@ -2180,68 +2182,119 @@ server <- function(input, output, session) {
         d_all <- hitters_data() %>% filter(Season==as.integer(sr_season()))
       }
 
-      # Build PDF page by page using grid/ggplot2 — no LaTeX needed
-      pdf(file, width=11, height=8.5, onefile=TRUE)
+      # Helper: build ggplot table
+      make_tbl_plot <- function(tbl, title_str) {
+        tbl[] <- lapply(tbl, as.character)
+        n_cols <- ncol(tbl); n_rows <- nrow(tbl)
+        col_names <- names(tbl)
+        tbl_long <- data.frame(
+          x = rep(seq_len(n_cols), each=n_rows+1),
+          y = rep(c(n_rows+1, seq(n_rows,1)), n_cols),
+          label = c(rbind(col_names,
+                          do.call(cbind, lapply(tbl, as.character)))),
+          is_header = rep(c(TRUE, rep(FALSE,n_rows)), n_cols),
+          stringsAsFactors=FALSE
+        )
+        ggplot(tbl_long, aes(x=x, y=y, label=label)) +
+          geom_tile(aes(fill=is_header), color="grey70", linewidth=0.3) +
+          geom_text(aes(fontface=ifelse(is_header,"bold","plain"),
+                        color=ifelse(is_header,"#222222","#333333")),
+                    size=3, hjust=0.5) +
+          scale_fill_manual(values=c("FALSE"="white","TRUE"="#e8e8e8"),
+                            guide="none") +
+          scale_color_identity() +
+          labs(title=title_str) +
+          theme_void(base_size=9) +
+          theme(plot.title=element_text(face="bold",size=10,hjust=0,
+                                         margin=margin(b=6)),
+                plot.margin=margin(10,10,10,10),
+                plot.background=element_rect(fill="white",color=NA))
+      }
+
+      pdf(file, width=17, height=11, onefile=TRUE)
 
       for (player in input$sr_players) {
         if (input$sr_type == "pitcher") {
-          plots <- build_pitcher_plots(player, sections, d_all, p_seqs_r())
+          plot_list <- build_pitcher_plots(player, sections, d_all, p_seqs_r())
         } else {
-          plots <- build_hitter_plots(player, sections, d_all)
+          plot_list <- build_hitter_plots(player, sections, d_all)
         }
+        if (length(plot_list) == 0) next
 
-        if (length(plots) == 0) next
-
-        # Title page for this player
-        grid::grid.newpage()
-        grid::grid.text(
-          paste0(player, "\n", input$sr_team, " — ", sr_season()),
-          x=0.5, y=0.55, gp=grid::gpar(fontsize=24, fontface="bold")
-        )
-        grid::grid.text(
-          paste0("NECBL Scouting Report — Generated ", format(Sys.Date(), "%B %d, %Y")),
-          x=0.5, y=0.42, gp=grid::gpar(fontsize=12, col="grey40")
-        )
-
-        # Render each section
-        for (nm in names(plots)) {
-          item <- plots[[nm]]
+        # Convert all items to ggplot objects
+        gg_items <- lapply(names(plot_list), function(nm) {
+          item <- plot_list[[nm]]
           if (item$type == "plot" && !is.null(item$plot)) {
-            grid::grid.newpage()
-            print(item$plot)
+            item$plot + theme(plot.background=element_rect(fill="white",color=NA),
+                              panel.background=element_rect(fill="white",color=NA),
+                              panel.grid.major=element_line(color="grey85"),
+                              axis.text=element_text(color="#333333"),
+                              axis.title=element_text(color="#222222"),
+                              plot.title=element_text(color="#111111"),
+                              legend.background=element_rect(fill="white"),
+                              legend.text=element_text(color="#333333"),
+                              strip.background=element_rect(fill="grey90"),
+                              strip.text=element_text(color="#222222"))
           } else if (item$type == "table" && !is.null(item$data)) {
-            grid::grid.newpage()
-            # Draw table as a ggplot
-            tbl <- item$data
-            # Convert all columns to character
-            tbl[] <- lapply(tbl, as.character)
-            # Build table plot
-            n_cols <- ncol(tbl)
-            n_rows <- nrow(tbl)
-            col_names <- names(tbl)
+            make_tbl_plot(item$data, item$title)
+          } else NULL
+        })
+        gg_items <- Filter(Negate(is.null), gg_items)
+        if (length(gg_items) == 0) next
 
-            tbl_long <- data.frame(
-              x = rep(seq_len(n_cols), each=n_rows+1),
-              y = rep(c(n_rows+1, seq(n_rows, 1)),  n_cols),
-              label = c(rbind(col_names,
-                              do.call(cbind, lapply(tbl, as.character)))),
-              is_header = rep(c(TRUE, rep(FALSE, n_rows)), n_cols),
-              stringsAsFactors=FALSE
-            )
+        # Header page — player name + team banner
+        grid::grid.newpage()
+        grid::grid.rect(gp=grid::gpar(fill="#111111", col=NA))
+        grid::grid.text(player, x=0.5, y=0.60,
+                        gp=grid::gpar(fontsize=32, fontface="bold", col="white"))
+        grid::grid.text(
+          paste0(input$sr_team, "  |  ", sr_season(), "  |  NECBL Scouting Report"),
+          x=0.5, y=0.44, gp=grid::gpar(fontsize=14, col="#aaaaaa"))
+        grid::grid.text(
+          paste0("Generated ", format(Sys.Date(),"%B %d, %Y")),
+          x=0.5, y=0.34, gp=grid::gpar(fontsize=10, col="#888888"))
 
-            p_tbl <- ggplot(tbl_long, aes(x=x, y=y, label=label)) +
-              geom_tile(aes(fill=is_header), color="grey80", linewidth=0.3) +
-              geom_text(aes(fontface=ifelse(is_header,"bold","plain")),
-                        size=3.2, hjust=0.5) +
-              scale_fill_manual(values=c("FALSE"="white","TRUE"="grey90"),
-                                guide="none") +
-              labs(title=item$title) +
-              theme_void(base_size=10) +
-              theme(plot.title=element_text(face="bold", size=12, hjust=0,
-                                             margin=margin(b=8)),
-                    plot.margin=margin(20,20,20,20))
-            print(p_tbl)
+        # Layout items in 3x3 grid per page
+        items_per_page <- 9
+        n_items <- length(gg_items)
+        n_pages <- ceiling(n_items / items_per_page)
+
+        for (pg in seq_len(n_pages)) {
+          idx_start <- (pg-1)*items_per_page + 1
+          idx_end   <- min(pg*items_per_page, n_items)
+          page_items <- gg_items[idx_start:idx_end]
+
+          # Pad to 9 with blank plots
+          while (length(page_items) < items_per_page) {
+            page_items <- c(page_items, list(ggplot()+theme_void()+
+              theme(plot.background=element_rect(fill="white",color=NA))))
           }
+
+          grid::grid.newpage()
+          # Page header strip
+          grid::pushViewport(grid::viewport(x=0.5,y=0.985,width=1,height=0.03,just="top"))
+          grid::grid.rect(gp=grid::gpar(fill="#111111",col=NA))
+          grid::grid.text(
+            paste0(player,"  |  ",input$sr_team,"  |  ",sr_season(),
+                   "  —  Page ",pg," of ",n_pages),
+            x=0.5,y=0.5,gp=grid::gpar(fontsize=8,col="white",fontface="bold"))
+          grid::popViewport()
+
+          # 3x3 content grid
+          content_vp <- grid::viewport(x=0.5,y=0.485,width=0.99,height=0.97)
+          grid::pushViewport(content_vp)
+          for (row in 1:3) {
+            for (col in 1:3) {
+              idx <- (row-1)*3 + col
+              x_pos <- (col-0.5)/3
+              y_pos <- 1 - (row-0.5)/3
+              vp <- grid::viewport(x=x_pos, y=y_pos,
+                                   width=1/3, height=1/3,
+                                   just="center")
+              print(page_items[[idx]], vp=vp)
+            }
+          }
+          grid::popViewport()
         }
       }
 
