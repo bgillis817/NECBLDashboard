@@ -2164,12 +2164,11 @@ server <- function(input, output, session) {
   output$sr_download <- downloadHandler(
     filename = function() {
       paste0("NECBL_ScoutingReport_",
-             gsub(" ","_",input$sr_team),"_",
+             gsub(" ","_", input$sr_team),"_",
              sr_season(),"_",format(Sys.Date(),"%Y%m%d"),".pdf")
     },
     content = function(file) {
       req(input$sr_players, length(input$sr_players)>0)
-
       sections <- input$sr_sections %||% character(0)
       if (length(sections) == 0) {
         showNotification("Select at least one section.", type="warning"); return()
@@ -2181,88 +2180,72 @@ server <- function(input, output, session) {
         d_all <- hitters_data() %>% filter(Season==as.integer(sr_season()))
       }
 
-      # Build all player data and save to RDS
-      tmp_dir  <- tempdir()
-      rds_path <- file.path(tmp_dir, "sr_data.rds")
-      tmp_rmd  <- file.path(tmp_dir, "report.Rmd")
+      # Build PDF page by page using grid/ggplot2 — no LaTeX needed
+      pdf(file, width=11, height=8.5, onefile=TRUE)
 
-      all_player_data <- lapply(input$sr_players, function(player) {
+      for (player in input$sr_players) {
         if (input$sr_type == "pitcher") {
-          build_pitcher_plots(player, sections, d_all, p_seqs_r())
+          plots <- build_pitcher_plots(player, sections, d_all, p_seqs_r())
         } else {
-          build_hitter_plots(player, sections, d_all)
+          plots <- build_hitter_plots(player, sections, d_all)
         }
-      })
-      names(all_player_data) <- input$sr_players
-      saveRDS(all_player_data, rds_path)
 
-      # Write Rmd that loads from RDS
-      rmd_lines <- c(
-        "---",
-        paste0('title: "NECBL Scouting Report — ',
-               gsub('"',"'",input$sr_team),' (',sr_season(),')"'),
-        'output:',
-        '  pdf_document:',
-        '    latex_engine: xelatex',
-        '    toc: false',
-        '    fig_width: 6.5',
-        '    fig_height: 3.8',
-        'geometry: margin=0.75in',
-        'fontsize: 10pt',
-        "---",
-        "",
-        "```{r setup, include=FALSE}",
-        "knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,",
-        "                      fig.width=6.5, fig.height=3.8)",
-        "library(ggplot2)",
-        "library(dplyr)",
-        "library(knitr)",
-        paste0('all_data <- readRDS("', rds_path, '")'),
-        "```",
-        ""
-      )
+        if (length(plots) == 0) next
 
-      for (pi in seq_along(input$sr_players)) {
-        player <- input$sr_players[pi]
-        safe_p <- gsub("[^a-zA-Z0-9]","_", player)
-
-        if (pi > 1) rmd_lines <- c(rmd_lines, "\\newpage", "")
-
-        rmd_lines <- c(rmd_lines,
-          paste0("# ", player),
-          paste0("**Team:** ", input$sr_team, " | **Season:** ", sr_season()),
-          ""
+        # Title page for this player
+        grid::grid.newpage()
+        grid::grid.text(
+          paste0(player, "\n", input$sr_team, " — ", sr_season()),
+          x=0.5, y=0.55, gp=grid::gpar(fontsize=24, fontface="bold")
+        )
+        grid::grid.text(
+          paste0("NECBL Scouting Report — Generated ", format(Sys.Date(), "%B %d, %Y")),
+          x=0.5, y=0.42, gp=grid::gpar(fontsize=12, col="grey40")
         )
 
-        rmd_lines <- c(rmd_lines,
-          paste0("```{r player_", safe_p, ", results='asis'}"),
-          paste0("plots <- all_data[['", player, "']]"),
-          "for (nm in names(plots)) {",
-          "  item <- plots[[nm]]",
-          "  if (item$type == 'table' && !is.null(item$data)) {",
-          "    cat('\\n\\n##', item$title, '\\n\\n')",
-          "    print(kable(item$data, format='latex', booktabs=TRUE,",
-          "               linesep=''))",
-          "    cat('\\n\\n')",
-          "  } else if (item$type == 'plot' && !is.null(item$plot)) {",
-          "    print(item$plot)",
-          "    cat('\\n\\n')",
-          "  }",
-          "}",
-          "```",
-          ""
-        )
+        # Render each section
+        for (nm in names(plots)) {
+          item <- plots[[nm]]
+          if (item$type == "plot" && !is.null(item$plot)) {
+            grid::grid.newpage()
+            print(item$plot)
+          } else if (item$type == "table" && !is.null(item$data)) {
+            grid::grid.newpage()
+            # Draw table as a ggplot
+            tbl <- item$data
+            # Convert all columns to character
+            tbl[] <- lapply(tbl, as.character)
+            # Build table plot
+            n_cols <- ncol(tbl)
+            n_rows <- nrow(tbl)
+            col_names <- names(tbl)
+
+            tbl_long <- data.frame(
+              x = rep(seq_len(n_cols), each=n_rows+1),
+              y = rep(c(n_rows+1, seq(n_rows, 1)),  n_cols),
+              label = c(rbind(col_names,
+                              do.call(cbind, lapply(tbl, as.character)))),
+              is_header = rep(c(TRUE, rep(FALSE, n_rows)), n_cols),
+              stringsAsFactors=FALSE
+            )
+
+            p_tbl <- ggplot(tbl_long, aes(x=x, y=y, label=label)) +
+              geom_tile(aes(fill=is_header), color="grey80", linewidth=0.3) +
+              geom_text(aes(fontface=ifelse(is_header,"bold","plain")),
+                        size=3.2, hjust=0.5) +
+              scale_fill_manual(values=c("FALSE"="white","TRUE"="grey90"),
+                                guide="none") +
+              labs(title=item$title) +
+              theme_void(base_size=10) +
+              theme(plot.title=element_text(face="bold", size=12, hjust=0,
+                                             margin=margin(b=8)),
+                    plot.margin=margin(20,20,20,20))
+            print(p_tbl)
+          }
+        }
       }
 
-      writeLines(rmd_lines, tmp_rmd)
-
-      tryCatch({
-        rmarkdown::render(tmp_rmd, output_file=file,
-                          envir=new.env(parent=globalenv()),
-                          quiet=TRUE)
-      }, error=function(e) {
-        showNotification(paste("PDF error:", e$message), type="error", duration=8)
-      })
+      dev.off()
     }
   )
   output$lb_hitters <- renderDataTable({
