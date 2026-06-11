@@ -102,7 +102,7 @@ filter_by_count <- function(d, cnt_val, sit_col, indiv_col) {
 process_hitters <- function(df) {
   if (is.null(df) || nrow(df) == 0) return(NULL)
   tryCatch({
-    df %>%
+    df <- df %>%
       mutate(
         Date = as.Date(Date, format="%m/%d/%Y"),
         Season = as.integer(format(Date, "%Y")),
@@ -110,33 +110,72 @@ process_hitters <- function(df) {
                                 team_names[BatterTeam], BatterTeam),
         PitcherTeamFull = ifelse(PitcherTeam %in% names(team_names),
                                  team_names[PitcherTeam], PitcherTeam),
-        wOBA_contribution = dplyr::case_when(
-          PlayResult=="Walk"           ~ woba_weights["Walk"],
-          PlayResult=="HitByPitch"     ~ woba_weights["HitByPitch"],
-          PlayResult=="Single"         ~ woba_weights["Single"],
-          PlayResult=="Double"         ~ woba_weights["Double"],
-          PlayResult=="Triple"         ~ woba_weights["Triple"],
-          PlayResult=="HomeRun"        ~ woba_weights["HomeRun"],
-          PlayResult=="FieldersChoice" ~ woba_weights["FieldersChoice"],
-          PlayResult=="Sacrifice"      ~ woba_weights["Sacrifice"],
-          PlayResult=="Error"          ~ woba_weights["Error"],
-          TRUE                         ~ woba_weights["Out"]
-        ),
         Balls   = as.double(substr(as.character(Balls),   1, 10)),
         Strikes = as.double(substr(as.character(Strikes), 1, 10)),
         CountSit   = count_situation(Balls, Strikes),
         CountIndiv = paste0(Balls, "-", Strikes)
+      )
+
+    # Keep all pitches for heat maps / plate discipline (pitch-level data)
+    # But mark PA-ending pitches for stat calculations
+    # Last pitch of each PAofInning = the PA outcome
+    df <- df %>%
+      arrange(Batter, Date, Inning, PAofInning, PitchNo) %>%
+      group_by(Batter, Date, Inning, PAofInning) %>%
+      mutate(
+        IsLastPitch = row_number() == n(),
+        wOBA_contribution = dplyr::case_when(
+          IsLastPitch & PlayResult=="Walk"           ~ woba_weights["Walk"],
+          IsLastPitch & PlayResult=="HitByPitch"     ~ woba_weights["HitByPitch"],
+          IsLastPitch & PlayResult=="Single"         ~ woba_weights["Single"],
+          IsLastPitch & PlayResult=="Double"         ~ woba_weights["Double"],
+          IsLastPitch & PlayResult=="Triple"         ~ woba_weights["Triple"],
+          IsLastPitch & PlayResult=="HomeRun"        ~ woba_weights["HomeRun"],
+          IsLastPitch & PlayResult=="FieldersChoice" ~ woba_weights["FieldersChoice"],
+          IsLastPitch & PlayResult=="Sacrifice"      ~ woba_weights["Sacrifice"],
+          IsLastPitch & PlayResult=="Error"          ~ woba_weights["Error"],
+          IsLastPitch                                ~ woba_weights["Out"],
+          TRUE                                       ~ 0
+        )
       ) %>%
-      arrange(Batter, Date, PitchNo) %>%
-      group_by(Batter, Season) %>%
-      mutate(PA_count        = row_number(),
-             cumulative_wOBA = cumsum(wOBA_contribution) / PA_count) %>%
-      ungroup() %>%
-      arrange(Batter, PitcherTeamFull, Date, PitchNo) %>%
-      group_by(Batter, Season, PitcherTeamFull) %>%
-      mutate(PA_count_opp        = row_number(),
-             cumulative_wOBA_opp = cumsum(wOBA_contribution) / PA_count_opp) %>%
       ungroup()
+
+    # Assign a sequential PA number per batter per season using PA-ending pitches only
+    pa_sequence <- df %>%
+      filter(IsLastPitch) %>%
+      arrange(Batter, Season, Date, Inning, PAofInning) %>%
+      group_by(Batter, Season) %>%
+      mutate(PA_count = row_number()) %>%
+      ungroup() %>%
+      dplyr::select(Batter, Season, Date, Inning, PAofInning, PA_count)
+
+    pa_sequence_opp <- df %>%
+      filter(IsLastPitch) %>%
+      arrange(Batter, Season, PitcherTeamFull, Date, Inning, PAofInning) %>%
+      group_by(Batter, Season, PitcherTeamFull) %>%
+      mutate(PA_count_opp = row_number()) %>%
+      ungroup() %>%
+      dplyr::select(Batter, Season, Date, Inning, PAofInning,
+                    PitcherTeamFull, PA_count_opp)
+
+    df <- df %>%
+      left_join(pa_sequence, by=c("Batter","Season","Date","Inning","PAofInning")) %>%
+      left_join(pa_sequence_opp, by=c("Batter","Season","Date","Inning",
+                                       "PAofInning","PitcherTeamFull"))
+
+    # Cumulative wOBA (only meaningful on PA-ending pitches)
+    df <- df %>%
+      arrange(Batter, Season, Date, Inning, PAofInning, PitchNo) %>%
+      group_by(Batter, Season) %>%
+      mutate(cumulative_wOBA = cumsum(wOBA_contribution) /
+               pmax(cumsum(IsLastPitch), 1)) %>%
+      ungroup() %>%
+      group_by(Batter, Season, PitcherTeamFull) %>%
+      mutate(cumulative_wOBA_opp = cumsum(wOBA_contribution) /
+               pmax(cumsum(IsLastPitch), 1)) %>%
+      ungroup()
+
+    df
   }, error = function(e) { message("Hitter process error: ", e$message); NULL })
 }
 
@@ -808,37 +847,79 @@ ui <- navbarPage(
         ),
         br(),
 
-        # Report type
+        # Team vs Player report toggle
+        radioButtons("sr_mode","Report Mode",
+                     choices=c("Team Totals"="team","Player Report"="player"),
+                     selected="team", inline=TRUE),
+
+        # Report type (hitting/pitching)
         radioButtons("sr_type","Report Type",
                      choices=c("Pitcher"="pitcher","Hitter"="hitter"),
                      selected="pitcher", inline=TRUE),
         tags$hr(),
 
-        # Team + player selection
+        # Team selection (always shown)
         uiOutput("sr_team_ui"),
-        uiOutput("sr_players_ui"),
-        fluidRow(
-          column(6, actionButton("sr_sel_all","All",  class="btn-default btn-sm")),
-          column(6, actionButton("sr_sel_none","Clear",class="btn-default btn-sm"))
+
+        # Player selection (only shown in player mode)
+        conditionalPanel("input.sr_mode == 'player'",
+          uiOutput("sr_players_ui"),
+          fluidRow(
+            column(6, actionButton("sr_sel_all","All",  class="btn-default btn-sm")),
+            column(6, actionButton("sr_sel_none","Clear",class="btn-default btn-sm"))
+          )
         ),
         tags$hr(),
 
-        # Section checkboxes
-        tags$div(class="section-header",style="font-size:14px;","Sections to Include"),
-        uiOutput("sr_sections_ui"),
-        tags$hr(),
+        # Section checkboxes (player mode only)
+        conditionalPanel("input.sr_mode == 'player'",
+          tags$div(class="section-header",style="font-size:14px;","Sections to Include"),
+          uiOutput("sr_sections_ui"),
+          tags$hr()
+        ),
 
-        # Generate button
+        # Generate PDF button
         downloadButton("sr_download","Generate PDF",
                        class="btn-primary",style="width:100%;"),
         br(),br(),
         uiOutput("sr_status_ui")
       ),
       mainPanel(width=9,
-        tags$div(class="section-header","Report Preview"),
-        tags$div(class="section-sub",
-                 "Preview shows first selected player. PDF will include all selected players."),
-        uiOutput("sr_preview_ui")
+        # Team totals view
+        conditionalPanel("input.sr_mode == 'team'",
+          tags$div(class="section-header","Team Totals"),
+          tags$div(class="section-sub","Cumulative stats with L/R, pitch type, and opponent breakdowns"),
+          br(),
+          uiOutput("sr_team_filter_ui"),
+          br(),
+          tabsetPanel(
+            tabPanel("Overview",
+              br(),
+              uiOutput("sr_team_stat_cards"),
+              br(),
+              tags$div(class="section-header","L/R Splits"),
+              dataTableOutput("sr_team_lr"),
+              br(),
+              tags$div(class="section-header","By Pitch Type"),
+              dataTableOutput("sr_team_pt"),
+              br(),
+              tags$div(class="section-header","By Opponent"),
+              dataTableOutput("sr_team_opp")
+            ),
+            tabPanel("Individual Players",
+              br(),
+              tags$div(class="section-sub","Ranked by wOBA (hitters) or CSW% (pitchers)"),
+              dataTableOutput("sr_team_players")
+            )
+          )
+        ),
+        # Player report preview
+        conditionalPanel("input.sr_mode == 'player'",
+          tags$div(class="section-header","Report Preview"),
+          tags$div(class="section-sub",
+                   "Preview shows first selected player. PDF includes all selected players."),
+          uiOutput("sr_preview_ui")
+        )
       )
     )
   )
@@ -947,6 +1028,7 @@ server <- function(input, output, session) {
     d
   })
 
+  # All pitches — used for heat maps, plate discipline scatter
   h_filt <- reactive({
     d <- h_base()
     if (!is.null(input$h_pitchType) && input$h_pitchType!="All")
@@ -954,11 +1036,19 @@ server <- function(input, output, session) {
     d
   })
 
+  # PA-level data — last pitch of each PA group only, used for all offensive stats
+  h_pa <- reactive({
+    h_filt() %>%
+      group_by(Batter, Date, Inning, PAofInning) %>%
+      slice_max(PitchNo, n=1, with_ties=FALSE) %>%
+      ungroup()
+  })
+
   h_stats <- reactive({
-    d <- h_filt(); if(is.null(d)||nrow(d)==0) return(NULL)
+    d <- h_pa(); if(is.null(d)||nrow(d)==0) return(NULL)
     hits  <- sum(d$PlayResult %in% c("Single","Double","Triple","HomeRun"))
     walks <- sum(d$PlayResult=="Walk"); hbp <- sum(d$PlayResult=="HitByPitch")
-    pa <- n_distinct(d$PA_count); ab <- pa-walks-hbp
+    pa <- nrow(d); ab <- pa-walks-hbp
     tb <- sum(d$PlayResult=="Single")+2*sum(d$PlayResult=="Double")+
           3*sum(d$PlayResult=="Triple")+4*sum(d$PlayResult=="HomeRun")
     list(pa=pa,
@@ -973,7 +1063,7 @@ server <- function(input, output, session) {
   output$h_card_slg  <- renderUI({ s<-h_stats();req(s); stat_card(sprintf("%.3f",s$slg),"SLG") })
 
   output$h_spray <- renderPlot({
-    d <- h_filt() %>%
+    d <- h_pa() %>%
       filter(!is.na(LastTrackedDistance),!is.na(Bearing),!is.na(PlayResult)) %>%
       mutate(bearing_rad=Bearing*pi/180,
              x=LastTrackedDistance*sin(bearing_rad),
@@ -1120,7 +1210,9 @@ server <- function(input, output, session) {
 
   # ── wOBA trends ───────────────────────────────────────────────────────────
   output$h_woba <- renderPlot({
-    d<-h_filt()%>%arrange(PA_count)%>%filter(is.finite(cumulative_wOBA));req(nrow(d)>0)
+    d <- h_pa() %>%
+      arrange(PA_count) %>% filter(is.finite(cumulative_wOBA))
+    req(nrow(d)>0)
     lv<-tail(d$cumulative_wOBA,1)
     ggplot(d,aes(x=PA_count,y=cumulative_wOBA)) +
       geom_hline(yintercept=c(.320,.370,.420),linetype="dashed",color="#2a2d3a") +
@@ -1158,15 +1250,15 @@ server <- function(input, output, session) {
 
   # ── Splits tables ─────────────────────────────────────────────────────────
   output$h_ptTable   <- renderDataTable({
-    datatable(h_filt()%>%group_by(PitchType=TaggedPitchType)%>%slg_stats(),
+    datatable(h_pa()%>%group_by(PitchType=TaggedPitchType)%>%slg_stats(),
               options=dt_opts,rownames=FALSE)
   })
   output$h_lrTable   <- renderDataTable({
-    datatable(h_filt()%>%group_by(Throws=PitcherThrows)%>%slg_stats(),
+    datatable(h_pa()%>%group_by(Throws=PitcherThrows)%>%slg_stats(),
               options=dt_opts,rownames=FALSE)
   })
   output$h_ptLrTable <- renderDataTable({
-    datatable(h_filt()%>%group_by(Throws=PitcherThrows,PitchType=TaggedPitchType)%>%slg_stats(),
+    datatable(h_pa()%>%group_by(Throws=PitcherThrows,PitchType=TaggedPitchType)%>%slg_stats(),
               options=dt_opts,rownames=FALSE)
   })
 
@@ -1667,6 +1759,173 @@ server <- function(input, output, session) {
   observeEvent(sr_season(), {
     session$sendCustomMessage("setSeasonBtns",
       list(prefix="sr", season=sr_season()))
+  })
+
+  # ── Team totals data ──────────────────────────────────────────────────────
+  sr_team_h_data <- reactive({
+    req(!is.null(hitters_data()), input$sr_team)
+    hitters_data() %>%
+      filter(Season==as.integer(sr_season()),
+             BatterTeamFull==input$sr_team) %>%
+      group_by(Batter, Date, Inning, PAofInning) %>%
+      slice_max(PitchNo, n=1, with_ties=FALSE) %>%
+      ungroup()
+  })
+
+  sr_team_p_data <- reactive({
+    req(!is.null(p_data_r()), input$sr_team)
+    p_data_r() %>%
+      filter(Season==as.integer(sr_season()),
+             PitcherTeamFull==input$sr_team)
+  })
+
+  output$sr_team_filter_ui <- renderUI({
+    fluidRow(
+      column(4,
+        radioButtons("sr_team_hand","Handedness Filter",
+                     choices=c("Combined","vs RHP/RHH"="Right","vs LHP/LHH"="Left"),
+                     selected="Combined", inline=TRUE)
+      )
+    )
+  })
+
+  # Team stat cards
+  output$sr_team_stat_cards <- renderUI({
+    req(input$sr_team)
+    if (input$sr_type == "hitter") {
+      d <- sr_team_h_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand != "Combined")
+        d <- d %>% filter(PitcherThrows==input$sr_team_hand)
+      if (is.null(d) || nrow(d)==0) return(NULL)
+      pa <- nrow(d)
+      h  <- sum(d$PlayResult %in% c("Single","Double","Triple","HomeRun"))
+      bb <- sum(d$PlayResult=="Walk")
+      hbp<- sum(d$PlayResult=="HitByPitch")
+      ab <- pa-bb-hbp
+      tb <- sum(d$PlayResult=="Single")+2*sum(d$PlayResult=="Double")+
+            3*sum(d$PlayResult=="Triple")+4*sum(d$PlayResult=="HomeRun")
+      fluidRow(
+        column(2, stat_card(pa, "PA")),
+        column(2, stat_card(sprintf("%.3f",ifelse(ab>0,h/ab,NA)), "BA")),
+        column(2, stat_card(sprintf("%.3f",ifelse(pa>0,(h+bb+hbp)/pa,NA)), "OBP")),
+        column(2, stat_card(sprintf("%.3f",ifelse(ab>0,tb/ab,NA)), "SLG")),
+        column(2, stat_card(sprintf("%.3f",round(sum(d$wOBA_contribution,na.rm=TRUE)/pa,3)), "wOBA")),
+        column(2, stat_card(sum(d$PlayResult=="HomeRun"), "HR"))
+      )
+    } else {
+      d <- sr_team_p_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand != "Combined")
+        d <- d %>% filter(BatterSide==input$sr_team_hand)
+      if (is.null(d) || nrow(d)==0) return(NULL)
+      sw <- sum(d$SwingCheck,na.rm=TRUE)
+      fluidRow(
+        column(2, stat_card(nrow(d), "Pitches")),
+        column(2, stat_card(paste0(round(mean(d$CSWCheck,na.rm=TRUE)*100,1),"%"), "CSW%")),
+        column(2, stat_card(paste0(round(mean(d$ZoneCheck,na.rm=TRUE)*100,1),"%"), "Zone%")),
+        column(2, stat_card(paste0(if(sw>0)round(sum(d$WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%"), "Whiff%")),
+        column(2, stat_card(round(mean(d$RelSpeed,na.rm=TRUE),1), "Avg Velo")),
+        column(2, stat_card(sum(d$StrikeoutCheck,na.rm=TRUE), "K"))
+      )
+    }
+  })
+
+  # Team L/R splits
+  output$sr_team_lr <- renderDataTable({
+    req(input$sr_team)
+    if (input$sr_type == "hitter") {
+      d <- sr_team_h_data()
+      tbl <- d %>% group_by(`Pitcher Throws`=PitcherThrows) %>% slg_stats()
+    } else {
+      d <- sr_team_p_data()
+      tbl <- d %>% group_by(`Batter Side`=BatterSide) %>%
+        summarise(
+          Pitches=n(), BF=sum(PACheck,na.rm=TRUE),
+          `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
+          `Zone%`=paste0(round(mean(ZoneCheck,na.rm=TRUE)*100,1),"%"),
+          `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
+          `K%`=paste0(round(sum(StrikeoutCheck,na.rm=TRUE)/max(BF,1)*100,1),"%"),
+          `BB%`=paste0(round(sum(WalkCheck,na.rm=TRUE)/max(BF,1)*100,1),"%"),
+          .groups="drop"
+        )
+    }
+    datatable(tbl, options=dt_opts, rownames=FALSE)
+  })
+
+  # Team by pitch type
+  output$sr_team_pt <- renderDataTable({
+    req(input$sr_team)
+    if (input$sr_type == "hitter") {
+      d <- sr_team_h_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand!="Combined")
+        d <- d %>% filter(PitcherThrows==input$sr_team_hand)
+      tbl <- d %>% group_by(`Pitch Type`=TaggedPitchType) %>% slg_stats()
+    } else {
+      d <- sr_team_p_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand!="Combined")
+        d <- d %>% filter(BatterSide==input$sr_team_hand)
+      tbl <- d %>% group_by(`Pitch Type`=TaggedPitchType) %>%
+        summarise(
+          N=n(),
+          Usage=paste0(round(n()/nrow(d)*100,1),"%"),
+          `Avg Velo`=round(mean(RelSpeed,na.rm=TRUE),1),
+          `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
+          `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
+          `Zone%`=paste0(round(mean(ZoneCheck,na.rm=TRUE)*100,1),"%"),
+          .groups="drop"
+        ) %>% arrange(desc(N))
+    }
+    datatable(tbl, options=dt_opts, rownames=FALSE)
+  })
+
+  # Team by opponent
+  output$sr_team_opp <- renderDataTable({
+    req(input$sr_team)
+    if (input$sr_type == "hitter") {
+      d <- sr_team_h_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand!="Combined")
+        d <- d %>% filter(PitcherThrows==input$sr_team_hand)
+      tbl <- d %>% group_by(Opponent=PitcherTeamFull) %>% slg_stats() %>%
+        arrange(desc(wOBA))
+    } else {
+      d <- sr_team_p_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand!="Combined")
+        d <- d %>% filter(BatterSide==input$sr_team_hand)
+      tbl <- d %>% group_by(Opponent=BatterTeam) %>%
+        summarise(
+          Pitches=n(), BF=sum(PACheck,na.rm=TRUE),
+          `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
+          `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
+          `K%`=paste0(round(sum(StrikeoutCheck,na.rm=TRUE)/max(BF,1)*100,1),"%"),
+          .groups="drop"
+        ) %>% arrange(desc(`CSW%`))
+    }
+    datatable(tbl, options=dt_opts, rownames=FALSE)
+  })
+
+  # Individual players ranked
+  output$sr_team_players <- renderDataTable({
+    req(input$sr_team)
+    if (input$sr_type == "hitter") {
+      d <- sr_team_h_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand!="Combined")
+        d <- d %>% filter(PitcherThrows==input$sr_team_hand)
+      tbl <- d %>% group_by(Batter) %>% slg_stats() %>%
+        arrange(desc(wOBA))
+    } else {
+      d <- sr_team_p_data()
+      if (!is.null(input$sr_team_hand) && input$sr_team_hand!="Combined")
+        d <- d %>% filter(BatterSide==input$sr_team_hand)
+      tbl <- d %>% group_by(Pitcher) %>%
+        summarise(
+          Pitches=n(), BF=sum(PACheck,na.rm=TRUE),
+          `CSW%`=round(mean(CSWCheck,na.rm=TRUE)*100,1),
+          `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0},
+          `Zone%`=round(mean(ZoneCheck,na.rm=TRUE)*100,1),
+          `Avg Velo`=round(mean(RelSpeed,na.rm=TRUE),1),
+          .groups="drop"
+        ) %>% arrange(desc(`CSW%`))
+    }
+    datatable(tbl, options=dt_opts, rownames=FALSE)
   })
 
   # Pitcher / hitter section options
@@ -2303,11 +2562,15 @@ server <- function(input, output, session) {
   )
   output$lb_hitters <- renderDataTable({
     req(!is.null(hitters_data()))
-    d <- hitters_data()%>%filter(Season==as.integer(lb_season()))
+    d <- hitters_data() %>%
+      filter(Season==as.integer(lb_season())) %>%
+      group_by(Batter, BatterTeamFull, Date, Inning, PAofInning) %>%
+      slice_max(PitchNo, n=1, with_ties=FALSE) %>%
+      ungroup()
     min_pa <- input$lb_min_pa%||%20
     tbl <- d%>%group_by(Batter,Team=BatterTeamFull)%>%
       summarise(
-        PA=n_distinct(PA_count),
+        PA=n(),
         H=sum(PlayResult%in%c("Single","Double","Triple","HomeRun")),
         `1B`=sum(PlayResult=="Single"),`2B`=sum(PlayResult=="Double"),
         `3B`=sum(PlayResult=="Triple"),HR=sum(PlayResult=="HomeRun"),
@@ -2349,7 +2612,11 @@ server <- function(input, output, session) {
 
   output$lb_team_hitting <- renderDataTable({
     req(!is.null(hitters_data()))
-    d <- hitters_data()%>%filter(Season==as.integer(lb_season()))
+    d <- hitters_data() %>%
+      filter(Season==as.integer(lb_season())) %>%
+      group_by(BatterTeamFull, Date, Inning, PAofInning, Batter) %>%
+      slice_max(PitchNo, n=1, with_ties=FALSE) %>%
+      ungroup()
     tbl <- d%>%group_by(Team=BatterTeamFull)%>%
       summarise(
         PA   = n(),
