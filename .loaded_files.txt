@@ -1,3 +1,15 @@
+20260609-FraserField-1_unverified.csv
+20260609-Keene-1_unverified.csv
+20260609-MackenzieStadium-1_unverified.csv
+20260609-NorthAdams-1_unverified.csv
+20260609-RogersPark-1_unverified.csv
+20260610-CardinesField-1_unverified.csv
+20260610-Keene-1_unverified.csv
+20260610-MaxfieldSC-1_unverified.csv
+20260610-OldMountain-1_unverified.csv
+20260610-SharkTank-1_unverified.csv
+20260611-FraserField-1_unverified.csv
+20260611-MaxfieldSC-1_unverified.csv
 Copy of 20250603-FitchHighSchool-1.csv
 Copy of 20250603-FraserField-1.csv
 Copy of 20250603-MackenzieStadium-1.csv
