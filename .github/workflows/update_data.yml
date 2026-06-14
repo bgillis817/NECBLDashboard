@@ -115,10 +115,64 @@ jobs:
 
           EOF
 
+      - name: Apply pitch reclassification corrections
+        run: |
+          python3 << 'EOF'
+          import os
+          import pandas as pd
+
+          corrections_path = "corrections.csv"
+          data_path = "NECBL_All.csv"
+
+          if not os.path.exists(corrections_path):
+              print("No corrections.csv found — skipping")
+          elif not os.path.exists(data_path):
+              print("No NECBL_All.csv found — skipping")
+          else:
+              corrections = pd.read_csv(corrections_path, low_memory=False)
+              if len(corrections) == 0:
+                  print("corrections.csv is empty — skipping")
+              else:
+                  data = pd.read_csv(data_path, low_memory=False)
+                  data['Date'] = pd.to_datetime(data['Date'], errors='coerce')
+
+                  # Build a lookup key matching the app's RowID: Pitcher__Date__PitchNo
+                  data['_RowID'] = (
+                      data['Pitcher'].astype(str) + "__" +
+                      data['Date'].dt.strftime('%Y-%m-%d') + "__" +
+                      data['PitchNo'].astype(str)
+                  )
+
+                  corrections['Date'] = pd.to_datetime(corrections['Date'], errors='coerce')
+                  corrections['_RowID'] = (
+                      corrections['Pitcher'].astype(str) + "__" +
+                      corrections['Date'].dt.strftime('%Y-%m-%d') + "__" +
+                      corrections['PitchNo'].astype(str)
+                  )
+
+                  # Keep only the most recent correction per RowID
+                  corrections = corrections.sort_values('Timestamp').drop_duplicates('_RowID', keep='last')
+
+                  type_map = dict(zip(corrections['_RowID'], corrections['NewType']))
+                  matched = data['_RowID'].isin(type_map)
+                  n_matched = matched.sum()
+
+                  data.loc[matched, 'TaggedPitchType'] = data.loc[matched, '_RowID'].map(type_map)
+                  data = data.drop(columns=['_RowID'])
+                  data['Date'] = data['Date'].dt.strftime('%m/%d/%Y')
+
+                  data.to_csv(data_path, index=False)
+                  print(f"Applied {n_matched} corrections out of {len(corrections)} logged")
+
+                  # Clear corrections file (keep header for next append)
+                  pd.DataFrame(columns=corrections.columns.drop('_RowID', errors='ignore')).to_csv(corrections_path, index=False)
+                  print("Cleared corrections.csv")
+          EOF
+
       - name: Commit updated data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add NECBL_All.csv .loaded_files.txt || true
+          git add NECBL_All.csv .loaded_files.txt corrections.csv || true
           git diff --staged --quiet || git commit -m "Auto-update NECBL data $(date +'%Y-%m-%d')"
           git push
