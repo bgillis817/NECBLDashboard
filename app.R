@@ -767,21 +767,22 @@ ui <- navbarPage(
             tags$div(class="section-header","Pitch Movement"),
             conditionalPanel("output.p_is_admin == true",
               tags$div(class="section-sub",
-                "Admin mode: use the lasso or box-select tool on the plot to select pitches, then reclassify below."),
+                "Admin mode: shows all pitches with valid movement data (including Undefined), regardless of the Pitch Type filter. Use the lasso or box-select tool to select pitches, then reclassify below."),
               plotly::plotlyOutput("p_movement_plotly",height="460px"),
               br(),
               tags$div(class="filter-bar",
                 fluidRow(
+                  column(2, uiOutput("p_undefined_count")),
                   column(3, uiOutput("p_reclass_count")),
                   column(4,
                     selectizeInput("p_reclass_newtype","New Pitch Type",
                                    choices=NULL, options=list(create=TRUE))
                   ),
-                  column(2,
+                  column(1,
                     actionButton("p_reclass_apply","Apply",class="btn-primary",
                                   style="margin-top:24px;")
                   ),
-                  column(3,
+                  column(2,
                     actionButton("p_reclass_push","Push Corrections to GitHub",
                                   class="btn-default",style="margin-top:24px;")
                   )
@@ -1573,11 +1574,26 @@ server <- function(input, output, session) {
   reclass_selected_ids <- reactiveVal(character(0))
   reclass_pending_log  <- reactiveVal(NULL)  # data.frame of applied corrections (this session)
 
+  # Admin movement data: ignores the Pitch Type filter so "Undefined" pitches
+  # (and every other type) are always visible for reclassification. Only
+  # requires non-missing movement coordinates to be plottable.
+  p_admin_data <- reactive({
+    req(input$p_pitcher,!is.null(p_raw()))
+    d <- p_raw() %>% filter(Pitcher==input$p_pitcher)
+    if(!is.null(input$p_dates)&&length(input$p_dates)>0)
+      d <- d %>% filter(Date%in%as.Date(input$p_dates))
+    else return(NULL)
+    if(input$p_batterSide!="All")
+      d <- d %>% filter(BatterSide==input$p_batterSide)
+    d %>% filter(!is.na(HorzBreak), !is.na(InducedVertBreak))
+  })
+
   # Interactive plotly movement plot
   output$p_movement_plotly <- plotly::renderPlotly({
-    d <- p_filt(); req(d, nrow(d)>0)
+    d <- p_admin_data(); req(d, nrow(d)>0)
     pal <- pitch_pal[as.character(sort(unique(d$TaggedPitchType)))]
     pal[is.na(pal)] <- "#94a3b8"
+    names(pal) <- sort(unique(d$TaggedPitchType))
 
     plotly::plot_ly(
       data = d,
@@ -1619,8 +1635,16 @@ server <- function(input, output, session) {
       tags$p("Pitches Selected"))
   })
 
-  observeEvent(p_filt(), {
-    d <- p_filt()
+  output$p_undefined_count <- renderUI({
+    d <- p_admin_data(); req(d)
+    n <- sum(d$TaggedPitchType == "Undefined", na.rm=TRUE)
+    tags$div(class="stat-card",
+      tags$h2(n),
+      tags$p("Undefined (plottable)"))
+  })
+
+  observeEvent(p_admin_data(), {
+    d <- p_admin_data()
     if (!is.null(d) && nrow(d)>0) {
       types <- sort(unique(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType)))
       updateSelectizeInput(session,"p_reclass_newtype",
