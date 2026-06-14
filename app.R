@@ -17,6 +17,7 @@ library(rmarkdown)
 library(knitr)
 library(httr)
 library(jsonlite)
+library(gridExtra)
 
 # ── Null coalesce ─────────────────────────────────────────────────────────────
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
@@ -446,6 +447,62 @@ dt_opts <- list(
   )
 )
 
+# ── PNG export helpers ────────────────────────────────────────────────────────
+# Render a data.frame as a clean white-background table image (for PNG export)
+render_table_png <- function(tbl, title_str="") {
+  if (is.null(tbl) || nrow(tbl)==0) {
+    return(ggplot()+annotate("text",x=0,y=0,label="No data",size=6,color="grey50")+
+             theme_void())
+  }
+  tbl[] <- lapply(tbl, as.character)
+  n_cols <- ncol(tbl); n_rows <- nrow(tbl)
+  col_names <- names(tbl)
+  tbl_long <- data.frame(
+    x = rep(seq_len(n_cols), each=n_rows+1),
+    y = rep(c(n_rows+1, seq(n_rows,1)), n_cols),
+    label = c(rbind(col_names, do.call(cbind, lapply(tbl, as.character)))),
+    is_header = rep(c(TRUE, rep(FALSE,n_rows)), n_cols),
+    stringsAsFactors=FALSE
+  )
+  p <- ggplot(tbl_long, aes(x=x, y=y, label=label)) +
+    geom_tile(aes(fill=is_header), color="grey70", linewidth=0.3) +
+    geom_text(aes(fontface=ifelse(is_header,"bold","plain"),
+                  color=ifelse(is_header,"#222222","#333333")),
+              size=3.4, hjust=0.5) +
+    scale_fill_manual(values=c("FALSE"="white","TRUE"="#e8e8e8"), guide="none") +
+    scale_color_identity() +
+    theme_void(base_size=10) +
+    theme(plot.margin=margin(14,14,14,14),
+          plot.background=element_rect(fill="white",color=NA))
+  if (nchar(title_str) > 0) {
+    p <- p + labs(title=title_str) +
+      theme(plot.title=element_text(face="bold",size=12,hjust=0,margin=margin(b=8),color="#111111"))
+  }
+  p
+}
+
+# Save a table data.frame as a PNG to `file`, sized to fit the table
+save_table_png <- function(file, tbl, title_str="") {
+  n_cols <- max(ncol(tbl), 1); n_rows <- max(nrow(tbl), 1)
+  w <- min(max(n_cols * 1.3, 4), 20)
+  h <- min(max((n_rows+2) * 0.35, 2), 24)
+  p <- render_table_png(tbl, title_str)
+  ggsave(file, p, width=w, height=h, dpi=200, bg="white", limitsize=FALSE)
+}
+
+# Save a ggplot object as PNG with dark background to match dashboard theme
+save_plot_png <- function(file, p, width=10, height=7) {
+  ggsave(file, p, width=width, height=height, dpi=200, bg="#0f1117", limitsize=FALSE)
+}
+
+# UI: small download-as-PNG link, placed above a table or plot
+png_dl_btn <- function(id) {
+  tags$div(style="text-align:right;margin-bottom:4px;",
+    downloadLink(id, label=tagList(icon("download")," PNG"),
+                 style="color:#8892b0;font-size:11px;text-decoration:none;")
+  )
+}
+
 # ── Dark CSS ──────────────────────────────────────────────────────────────────
 dark_css <- "
 body{background:#0f1117!important;color:#e8eaf0!important;
@@ -599,7 +656,7 @@ ui <- navbarPage(
             br(),
             tags$div(class="section-header","Spray Chart"),
             tags$div(class="section-sub","Colored by play result"),
-            plotOutput("h_spray",height="500px")
+            tagList(png_dl_btn("h_spray_png"), plotOutput("h_spray",height="500px"))
           ),
           tabPanel("Plate Discipline",
             br(),
@@ -631,26 +688,26 @@ ui <- navbarPage(
                 "<span style='color:#8892b0;'>&#9675; Take (out of zone)</span>"
               ))
             ),
-            plotOutput("h_pd_plot",height="520px")
+            tagList(png_dl_btn("h_pd_plot_png"), plotOutput("h_pd_plot",height="520px"))
           ),
           tabPanel("wOBA Trends",
             br(),
             tags$div(class="section-header","Rolling Cumulative wOBA"),
-            plotOutput("h_woba",height="340px"),
+            tagList(png_dl_btn("h_woba_png"), plotOutput("h_woba",height="340px")),
             br(),
             tags$div(class="section-header","wOBA by Opponent"),
-            plotOutput("h_wobaOpp",height="340px")
+            tagList(png_dl_btn("h_wobaOpp_png"), plotOutput("h_wobaOpp",height="340px"))
           ),
           tabPanel("Splits",
             br(),
             tags$div(class="section-header","Stats by Pitch Type"),
-            dataTableOutput("h_ptTable"),
+            tagList(png_dl_btn("h_ptTable_png"), dataTableOutput("h_ptTable")),
             br(),
             tags$div(class="section-header","Righty / Lefty Splits"),
-            dataTableOutput("h_lrTable"),
+            tagList(png_dl_btn("h_lrTable_png"), dataTableOutput("h_lrTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Handedness"),
-            dataTableOutput("h_ptLrTable")
+            tagList(png_dl_btn("h_ptLrTable_png"), dataTableOutput("h_ptLrTable"))
           ),
           tabPanel("Batted Ball",
             br(),
@@ -671,16 +728,16 @@ ui <- navbarPage(
             ),
             br(),
             tags$div(class="section-header","Cumulative"),
-            dataTableOutput("h_bb_totalTable"),
+            tagList(png_dl_btn("h_bb_totalTable_png"), dataTableOutput("h_bb_totalTable")),
             br(),
             tags$div(class="section-header","By Pitch Type"),
-            dataTableOutput("h_bb_ptTable"),
+            tagList(png_dl_btn("h_bb_ptTable_png"), dataTableOutput("h_bb_ptTable")),
             br(),
             tags$div(class="section-header","By Handedness"),
-            dataTableOutput("h_bb_lrTable"),
+            tagList(png_dl_btn("h_bb_lrTable_png"), dataTableOutput("h_bb_lrTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Handedness"),
-            dataTableOutput("h_bb_ptLrTable")
+            tagList(png_dl_btn("h_bb_ptLrTable_png"), dataTableOutput("h_bb_ptLrTable"))
           ),
           tabPanel("Heat Maps",
             br(),
@@ -696,7 +753,7 @@ ui <- navbarPage(
                                selected="Combined",inline=TRUE))
               )
             ),
-            plotOutput("h_heatmap",height="460px")
+            tagList(png_dl_btn("h_heatmap_png"), plotOutput("h_heatmap",height="460px"))
           )
         )
       )
@@ -746,21 +803,21 @@ ui <- navbarPage(
             ),
             br(),
             tags$div(class="section-header","Pitch Arsenal"),
-            dataTableOutput("p_arsenal"),
+            tagList(png_dl_btn("p_arsenal_png"), dataTableOutput("p_arsenal")),
             br(),
             tags$div(class="section-header","Results by Pitch Type"),
-            dataTableOutput("p_results"),
+            tagList(png_dl_btn("p_results_png"), dataTableOutput("p_results")),
             br(),
             tags$div(class="section-header","L / R Splits"),
-            dataTableOutput("p_splits"),
+            tagList(png_dl_btn("p_splits_png"), dataTableOutput("p_splits")),
             br(),
             tags$div(class="section-header","Pitch Usage by Count"),
             tags$div(class="section-sub","% of each pitch type thrown in each count"),
-            dataTableOutput("p_count_usage"),
+            tagList(png_dl_btn("p_count_usage_png"), dataTableOutput("p_count_usage")),
             br(),
             tags$div(class="section-header","Pitch Usage vs L / R"),
             tags$div(class="section-sub","% of each pitch type thrown vs each batter side"),
-            dataTableOutput("p_lr_usage")
+            tagList(png_dl_btn("p_lr_usage_png"), dataTableOutput("p_lr_usage"))
           ),
           tabPanel("Movement & Release",
             br(),
@@ -768,7 +825,7 @@ ui <- navbarPage(
             conditionalPanel("output.p_is_admin == true",
               tags$div(class="section-sub",
                 "Admin mode: shows all pitches with valid movement data (including Undefined), regardless of the Pitch Type filter. Use the lasso or box-select tool to select pitches, then reclassify below."),
-              plotly::plotlyOutput("p_movement_plotly",height="460px"),
+              tagList(png_dl_btn("p_movement_plotly_png"), plotly::plotlyOutput("p_movement_plotly",height="460px")),
               br(),
               tags$div(class="filter-bar",
                 fluidRow(
@@ -791,11 +848,11 @@ ui <- navbarPage(
               uiOutput("p_reclass_status")
             ),
             conditionalPanel("output.p_is_admin != true",
-              plotOutput("p_movement",height="420px")
+              tagList(png_dl_btn("p_movement_png"), plotOutput("p_movement",height="420px"))
             ),
             br(),
             tags$div(class="section-header","Release Points"),
-            plotOutput("p_release",height="370px")
+            tagList(png_dl_btn("p_release_png"), plotOutput("p_release",height="370px"))
           ),
           tabPanel("Pitch Sequencing",
             br(),
@@ -813,19 +870,19 @@ ui <- navbarPage(
               )
             ),
             fluidRow(
-              column(7, plotOutput("p_seqMatrix",height="520px",click="p_mat_click")),
+              column(7, tagList(png_dl_btn("p_seqMatrix_png"), plotOutput("p_seqMatrix",height="520px",click="p_mat_click"))),
               column(5,
                 tags$div(class="section-header",style="font-size:14px;","Pair Locations"),
                 fluidRow(
                   column(6,
                     tags$p(textOutput("p_seq_lbl1"),
                            style="color:#b0b8d4;font-size:11px;font-weight:600;text-align:center;"),
-                    plotOutput("p_seq_loc1",height="230px")
+                    tagList(png_dl_btn("p_seq_loc1_png"), plotOutput("p_seq_loc1",height="230px"))
                   ),
                   column(6,
                     tags$p(textOutput("p_seq_lbl2"),
                            style="color:#b0b8d4;font-size:11px;font-weight:600;text-align:center;"),
-                    plotOutput("p_seq_loc2",height="230px")
+                    tagList(png_dl_btn("p_seq_loc2_png"), plotOutput("p_seq_loc2",height="230px"))
                   )
                 ),
                 br(),
@@ -846,23 +903,23 @@ ui <- navbarPage(
                                selected="Combined",inline=TRUE))
               )
             ),
-            plotOutput("p_heatmap",height="480px")
+            tagList(png_dl_btn("p_heatmap_png"), plotOutput("p_heatmap",height="480px"))
           ),
           tabPanel("Velocity & Spin",
             br(),
             tags$div(class="section-header","Velocity Over Time"),
-            plotOutput("p_velo",height="360px"),
+            tagList(png_dl_btn("p_velo_png"), plotOutput("p_velo",height="360px")),
             br(),
             tags$div(class="section-header","Spin Rate Over Time"),
-            plotOutput("p_spin",height="360px")
+            tagList(png_dl_btn("p_spin_png"), plotOutput("p_spin",height="360px"))
           ),
           tabPanel("Count Splits",
             br(),
             tags$div(class="section-header","Results by Count"),
-            dataTableOutput("p_countTable"),
+            tagList(png_dl_btn("p_countTable_png"), dataTableOutput("p_countTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Batter Side"),
-            dataTableOutput("p_ptHandTable")
+            tagList(png_dl_btn("p_ptHandTable_png"), dataTableOutput("p_ptHandTable"))
           ),
           tabPanel("Batted Ball",
             br(),
@@ -883,16 +940,16 @@ ui <- navbarPage(
             ),
             br(),
             tags$div(class="section-header","Cumulative"),
-            dataTableOutput("p_bb_totalTable"),
+            tagList(png_dl_btn("p_bb_totalTable_png"), dataTableOutput("p_bb_totalTable")),
             br(),
             tags$div(class="section-header","By Pitch Type"),
-            dataTableOutput("p_bb_ptTable"),
+            tagList(png_dl_btn("p_bb_ptTable_png"), dataTableOutput("p_bb_ptTable")),
             br(),
             tags$div(class="section-header","By Batter Side"),
-            dataTableOutput("p_bb_lrTable"),
+            tagList(png_dl_btn("p_bb_lrTable_png"), dataTableOutput("p_bb_lrTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Batter Side"),
-            dataTableOutput("p_bb_ptLrTable")
+            tagList(png_dl_btn("p_bb_ptLrTable_png"), dataTableOutput("p_bb_ptLrTable"))
           )
         )
       )
@@ -930,24 +987,24 @@ ui <- navbarPage(
       tabPanel("Hitter Leaders",
         br(),
         tags$div(class="section-header","Qualified Hitters — Ranked by wOBA"),
-        dataTableOutput("lb_hitters")
+        tagList(png_dl_btn("lb_hitters_png"), dataTableOutput("lb_hitters"))
       ),
       tabPanel("Pitcher Leaders",
         br(),
         tags$div(class="section-header","Qualified Pitchers — Ranked by CSW%"),
-        dataTableOutput("lb_pitchers")
+        tagList(png_dl_btn("lb_pitchers_png"), dataTableOutput("lb_pitchers"))
       ),
       tabPanel("Team Hitting",
         br(),
         tags$div(class="section-header","Cumulative Team Hitting Stats"),
         tags$div(class="section-sub","Click any column header to sort"),
-        dataTableOutput("lb_team_hitting")
+        tagList(png_dl_btn("lb_team_hitting_png"), dataTableOutput("lb_team_hitting"))
       ),
       tabPanel("Team Pitching",
         br(),
         tags$div(class="section-header","Cumulative Team Pitching Stats"),
         tags$div(class="section-sub","Click any column header to sort"),
-        dataTableOutput("lb_team_pitching")
+        tagList(png_dl_btn("lb_team_pitching_png"), dataTableOutput("lb_team_pitching"))
       )
     )
   ),
@@ -1025,18 +1082,18 @@ ui <- navbarPage(
               uiOutput("sr_team_stat_cards"),
               br(),
               tags$div(class="section-header","L/R Splits"),
-              dataTableOutput("sr_team_lr"),
+              tagList(png_dl_btn("sr_team_lr_png"), dataTableOutput("sr_team_lr")),
               br(),
               tags$div(class="section-header","By Pitch Type"),
-              dataTableOutput("sr_team_pt"),
+              tagList(png_dl_btn("sr_team_pt_png"), dataTableOutput("sr_team_pt")),
               br(),
               tags$div(class="section-header","By Opponent"),
-              dataTableOutput("sr_team_opp")
+              tagList(png_dl_btn("sr_team_opp_png"), dataTableOutput("sr_team_opp"))
             ),
             tabPanel("Individual Players",
               br(),
               tags$div(class="section-sub","Ranked by wOBA (hitters) or CSW% (pitchers)"),
-              dataTableOutput("sr_team_players")
+              tagList(png_dl_btn("sr_team_players_png"), dataTableOutput("sr_team_players"))
             )
           )
         ),
@@ -1189,7 +1246,7 @@ server <- function(input, output, session) {
   output$h_card_obp  <- renderUI({ s<-h_stats();req(s); stat_card(sprintf("%.3f",s$obp),"OBP") })
   output$h_card_slg  <- renderUI({ s<-h_stats();req(s); stat_card(sprintf("%.3f",s$slg),"SLG") })
 
-  output$h_spray <- renderPlot({
+  h_spray_plot <- reactive({
     d <- h_pa() %>%
       filter(!is.na(LastTrackedDistance),!is.na(Bearing),!is.na(PlayResult)) %>%
       mutate(bearing_rad=Bearing*pi/180,
@@ -1237,7 +1294,12 @@ server <- function(input, output, session) {
       theme_navs() +
       theme(axis.text=element_blank(),axis.title=element_blank(),
             panel.grid=element_blank(),panel.background=element_rect(fill="#0f1117",color=NA))
-  }, bg="#0f1117")
+  })
+  output$h_spray <- renderPlot({ h_spray_plot() }, bg="#0f1117")
+  output$h_spray_png <- downloadHandler(
+    filename=function() "SprayChart.png",
+    content=function(file) save_plot_png(file, h_spray_plot(), width=8, height=8)
+  )
 
   # ── Plate Discipline ──────────────────────────────────────────────────────
   h_pd_data <- reactive({
@@ -1311,7 +1373,7 @@ server <- function(input, output, session) {
       tags$p("Chase%"))
   })
 
-  output$h_pd_plot <- renderPlot({
+  h_pd_plot_plot <- reactive({
     d<-h_pd_data();req(d,nrow(d)>0)
     outcome_pal <- c("Contact (zone)"="#4ECDC4","Whiff (zone)"="#ff4655",
                      "Called Strike"="#ffd700","Ball (zone)"="#34d399",
@@ -1333,10 +1395,15 @@ server <- function(input, output, session) {
       labs(title=paste(input$h_batter,"—",h_season(),"Plate Discipline"),
            x="Horizontal (Hitter's View)",y="Vertical Height (ft)") +
       theme_navs()
-  }, bg="#0f1117")
+  })
+  output$h_pd_plot <- renderPlot({ h_pd_plot_plot() }, bg="#0f1117")
+  output$h_pd_plot_png <- downloadHandler(
+    filename=function() "PlateDiscipline.png",
+    content=function(file) save_plot_png(file, h_pd_plot_plot(), width=10, height=9)
+  )
 
   # ── wOBA trends ───────────────────────────────────────────────────────────
-  output$h_woba <- renderPlot({
+  h_woba_plot <- reactive({
     d <- h_pa() %>%
       arrange(PA_count) %>% filter(is.finite(cumulative_wOBA))
     req(nrow(d)>0)
@@ -1353,9 +1420,14 @@ server <- function(input, output, session) {
       labs(title=paste(input$h_batter,"—",h_season(),"Rolling wOBA"),
            x="Plate Appearance",y="wOBA") +
       theme_navs()
-  }, bg="#0f1117")
+  })
+  output$h_woba <- renderPlot({ h_woba_plot() }, bg="#0f1117")
+  output$h_woba_png <- downloadHandler(
+    filename=function() "RollingWOBA.png",
+    content=function(file) save_plot_png(file, h_woba_plot(), width=10, height=5.5)
+  )
 
-  output$h_wobaOpp <- renderPlot({
+  h_wobaOpp_plot <- reactive({
     d<-h_base()%>%filter(!is.na(PitcherTeamFull),PitcherTeamFull!="");req(nrow(d)>0)
     teams<-sort(unique(d$PitcherTeamFull))
     col_map<-setNames(team_pal[seq_along(teams)],teams)
@@ -1373,21 +1445,28 @@ server <- function(input, output, session) {
                     label=sprintf("%.3f",finals$fw[i]),
                     hjust=-0.1,size=3,color=col_map[finals$PitcherTeamFull[i]])
     p
-  }, bg="#0f1117")
+  })
+  output$h_wobaOpp <- renderPlot({ h_wobaOpp_plot() }, bg="#0f1117")
+  output$h_wobaOpp_png <- downloadHandler(
+    filename=function() "WOBAByOpponent.png",
+    content=function(file) save_plot_png(file, h_wobaOpp_plot(), width=10, height=5.5)
+  )
 
   # ── Splits tables ─────────────────────────────────────────────────────────
-  output$h_ptTable   <- renderDataTable({
-    datatable(h_pa()%>%group_by(PitchType=TaggedPitchType)%>%slg_stats(),
-              options=dt_opts,rownames=FALSE)
-  })
-  output$h_lrTable   <- renderDataTable({
-    datatable(h_pa()%>%group_by(Throws=PitcherThrows)%>%slg_stats(),
-              options=dt_opts,rownames=FALSE)
-  })
-  output$h_ptLrTable <- renderDataTable({
-    datatable(h_pa()%>%group_by(Throws=PitcherThrows,PitchType=TaggedPitchType)%>%slg_stats(),
-              options=dt_opts,rownames=FALSE)
-  })
+  h_ptTable_df   <- reactive({ h_pa()%>%group_by(PitchType=TaggedPitchType)%>%slg_stats() })
+  h_lrTable_df   <- reactive({ h_pa()%>%group_by(Throws=PitcherThrows)%>%slg_stats() })
+  h_ptLrTable_df <- reactive({ h_pa()%>%group_by(Throws=PitcherThrows,PitchType=TaggedPitchType)%>%slg_stats() })
+
+  output$h_ptTable   <- renderDataTable({ datatable(h_ptTable_df(), options=dt_opts, rownames=FALSE) })
+  output$h_lrTable   <- renderDataTable({ datatable(h_lrTable_df(), options=dt_opts, rownames=FALSE) })
+  output$h_ptLrTable <- renderDataTable({ datatable(h_ptLrTable_df(), options=dt_opts, rownames=FALSE) })
+
+  output$h_ptTable_png   <- downloadHandler(filename=function() "PitchTypeSplits.png",
+    content=function(file) save_table_png(file, h_ptTable_df(), "Stats by Pitch Type"))
+  output$h_lrTable_png   <- downloadHandler(filename=function() "LRSplits.png",
+    content=function(file) save_table_png(file, h_lrTable_df(), "Righty / Lefty Splits"))
+  output$h_ptLrTable_png <- downloadHandler(filename=function() "PitchTypeXHandedness.png",
+    content=function(file) save_table_png(file, h_ptLrTable_df(), "Pitch Type x Handedness"))
 
   # ── Batted Ball (hitter) ──────────────────────────────────────────────────
   h_bb_data <- reactive({
@@ -1419,26 +1498,25 @@ server <- function(input, output, session) {
     d<-h_bb_data();req(nrow(d)>0)
     bb_card(sum(d$TaggedHitType=="Popup",na.rm=TRUE),nrow(d),"PU%")
   })
-  output$h_bb_totalTable <- renderDataTable({
-    d<-h_bb_data();req(nrow(d)>0)
-    datatable(d%>%mutate(Total="All")%>%group_by(Total)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
-  })
-  output$h_bb_ptTable <- renderDataTable({
-    d<-h_bb_data();req(nrow(d)>0)
-    datatable(d%>%group_by(PitchType=TaggedPitchType)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
-  })
-  output$h_bb_lrTable <- renderDataTable({
-    d<-h_bb_data();req(nrow(d)>0)
-    datatable(d%>%group_by(Throws=PitcherThrows)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
-  })
-  output$h_bb_ptLrTable <- renderDataTable({
-    d<-h_bb_data();req(nrow(d)>0)
-    datatable(d%>%group_by(Throws=PitcherThrows,PitchType=TaggedPitchType)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
-  })
+
+  h_bb_totalTable_df <- reactive({ d<-h_bb_data(); req(nrow(d)>0); d%>%mutate(Total="All")%>%group_by(Total)%>%bb_stats_fn() })
+  h_bb_ptTable_df    <- reactive({ d<-h_bb_data(); req(nrow(d)>0); d%>%group_by(PitchType=TaggedPitchType)%>%bb_stats_fn() })
+  h_bb_lrTable_df    <- reactive({ d<-h_bb_data(); req(nrow(d)>0); d%>%group_by(Throws=PitcherThrows)%>%bb_stats_fn() })
+  h_bb_ptLrTable_df  <- reactive({ d<-h_bb_data(); req(nrow(d)>0); d%>%group_by(Throws=PitcherThrows,PitchType=TaggedPitchType)%>%bb_stats_fn() })
+
+  output$h_bb_totalTable <- renderDataTable({ datatable(h_bb_totalTable_df(), options=dt_opts, rownames=FALSE) })
+  output$h_bb_ptTable    <- renderDataTable({ datatable(h_bb_ptTable_df(), options=dt_opts, rownames=FALSE) })
+  output$h_bb_lrTable    <- renderDataTable({ datatable(h_bb_lrTable_df(), options=dt_opts, rownames=FALSE) })
+  output$h_bb_ptLrTable  <- renderDataTable({ datatable(h_bb_ptLrTable_df(), options=dt_opts, rownames=FALSE) })
+
+  output$h_bb_totalTable_png <- downloadHandler(filename=function() "BattedBall_Cumulative.png",
+    content=function(file) save_table_png(file, h_bb_totalTable_df(), "Batted Ball — Cumulative"))
+  output$h_bb_ptTable_png    <- downloadHandler(filename=function() "BattedBall_ByPitchType.png",
+    content=function(file) save_table_png(file, h_bb_ptTable_df(), "Batted Ball — By Pitch Type"))
+  output$h_bb_lrTable_png    <- downloadHandler(filename=function() "BattedBall_ByHandedness.png",
+    content=function(file) save_table_png(file, h_bb_lrTable_df(), "Batted Ball — By Handedness"))
+  output$h_bb_ptLrTable_png  <- downloadHandler(filename=function() "BattedBall_PitchTypeXHand.png",
+    content=function(file) save_table_png(file, h_bb_ptLrTable_df(), "Batted Ball — Pitch Type x Handedness"))
 
   # ── Heat maps (hitter) ────────────────────────────────────────────────────
   output$h_hm_pitch_ui <- renderUI({
@@ -1451,7 +1529,7 @@ server <- function(input, output, session) {
     selectInput("h_hm_count","Count / Situation",
                 choices=count_choices(h_base()$CountIndiv))
   })
-  output$h_heatmap <- renderPlot({
+  h_heatmap_plot <- reactive({
     req(!is.null(h_raw()),input$h_batter)
     d <- h_base()
     if (!is.null(input$h_hm_pitch) && input$h_hm_pitch!="All Pitches")
@@ -1462,7 +1540,12 @@ server <- function(input, output, session) {
     sub <- paste("Pitch:",input$h_hm_pitch%||%"All","| Count:",
                  input$h_hm_count%||%"All","| Throws:",input$h_hm_hand%||%"Combined")
     loc_heatmap(d, paste(input$h_batter,"—",h_season(),"Heat Map"), sub, flip_side=TRUE)
-  }, bg="#0f1117")
+  })
+  output$h_heatmap <- renderPlot({ h_heatmap_plot() }, bg="#0f1117")
+  output$h_heatmap_png <- downloadHandler(
+    filename=function() "HeatMap.png",
+    content=function(file) save_plot_png(file, h_heatmap_plot(), width=8, height=7.5)
+  )
 
   # ==========================================================================
   #  PITCHER REACTIVES
@@ -1602,7 +1685,11 @@ server <- function(input, output, session) {
       type = "scatter", mode = "markers",
       key = ~RowID,
       marker = list(size=9, opacity=0.75),
-      text = ~paste0(TaggedPitchType, "<br>Velo: ", round(RelSpeed,1),
+      text = ~paste0(TaggedPitchType,
+                     "<br>Velo: ", round(RelSpeed,1), " mph",
+                     "<br>Spin: ", round(SpinRate,0), " rpm",
+                     "<br>IVB: ", round(InducedVertBreak,1), " in",
+                     "<br>HB: ", round(HorzBreak,1), " in",
                      "<br>Count: ", Balls, "-", Strikes),
       hoverinfo = "text",
       source = "p_movement_select"
@@ -1622,6 +1709,24 @@ server <- function(input, output, session) {
                      modeBarButtonsToAdd=c("lasso2d","select2d")) %>%
       plotly::event_register("plotly_selected")
   })
+
+  # Static ggplot equivalent of the admin movement plot, for PNG export
+  p_movement_plotly_plot <- reactive({
+    d <- p_admin_data(); req(d, nrow(d)>0)
+    ggplot(d,aes(x=HorzBreak,y=InducedVertBreak,color=TaggedPitchType))+
+      geom_hline(yintercept=0,color="#2a2d3a",linewidth=.8)+
+      geom_vline(xintercept=0,color="#2a2d3a",linewidth=.8)+
+      geom_point(size=2.5,alpha=.7)+
+      scale_color_manual(values=pitch_pal,na.value="#94a3b8",name="Pitch Type")+
+      xlim(-30,30)+ylim(-30,30)+
+      labs(title=paste(input$p_pitcher,"—",p_season(),"Movement (All Pitches incl. Undefined)"),
+           x="Horizontal Break (in)",y="Induced Vertical Break (in)")+
+      theme_navs()
+  })
+  output$p_movement_plotly_png <- downloadHandler(
+    filename=function() "Movement_AdminView.png",
+    content=function(file) save_plot_png(file, p_movement_plotly_plot(), width=8, height=7)
+  )
 
   observeEvent(plotly::event_data("plotly_selected", source="p_movement_select"), {
     sel <- plotly::event_data("plotly_selected", source="p_movement_select")
@@ -1751,7 +1856,8 @@ server <- function(input, output, session) {
     stat_card(paste0(round(mean(d$ZoneCheck,na.rm=TRUE)*100,1),"%"),"Zone%")
   })
 
-  output$p_arsenal <- renderDataTable({
+  p_arsenal_df <- reactive({
+
     d<-p_filt();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Pitch=TaggedPitchType)%>%
       summarise(
@@ -1769,10 +1875,16 @@ server <- function(input, output, session) {
       )%>%
       mutate(Usage=scales::percent(Pitches/sum(Pitches),accuracy=0.1))%>%
       dplyr::select(Pitch,Pitches,Usage,`Avg Velo`,`Max Velo`,Spin,IVB,HB,`CSW%`,`Zone%`,`Whiff%`)
-    datatable(tbl,options=dt_opts,rownames=FALSE)
+    tbl
   })
+  output$p_arsenal <- renderDataTable({ datatable(p_arsenal_df(), options=dt_opts, rownames=FALSE) })
+  output$p_arsenal_png <- downloadHandler(
+    filename=function() "PitchArsenal.png",
+    content=function(file) save_table_png(file, p_arsenal_df())
+  )
 
-  output$p_results <- renderDataTable({
+  p_results_df <- reactive({
+
     d<-p_filt();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Pitch=TaggedPitchType)%>%
       summarise(Pitches=n(),PA=sum(PACheck,na.rm=TRUE),AB=sum(ABCheck,na.rm=TRUE),
@@ -1786,10 +1898,16 @@ server <- function(input, output, session) {
              OBP=sprintf("%.3f",ifelse(PA>0,(H+BB)/PA,NA)),
              SLG=sprintf("%.3f",ifelse(AB>0,TB/AB,NA)))%>%
       dplyr::select(Pitch,Pitches,PA,SO,BB,H,HR,AVG,OBP,SLG)
-    datatable(tbl,options=dt_opts,rownames=FALSE)
+    tbl
   })
+  output$p_results <- renderDataTable({ datatable(p_results_df(), options=dt_opts, rownames=FALSE) })
+  output$p_results_png <- downloadHandler(
+    filename=function() "ResultsByPitchType.png",
+    content=function(file) save_table_png(file, p_results_df())
+  )
 
-  output$p_splits <- renderDataTable({
+  p_splits_df <- reactive({
+
     d<-p_filt();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Side=BatterSide)%>%
       summarise(Pitches=n(),PA=sum(PACheck,na.rm=TRUE),AB=sum(ABCheck,na.rm=TRUE),
@@ -1799,10 +1917,16 @@ server <- function(input, output, session) {
                 .groups="drop")%>%
       mutate(AVG=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
              OBP=sprintf("%.3f",ifelse(PA>0,(H+BB)/PA,NA)))
-    datatable(tbl,options=dt_opts,rownames=FALSE)
+    tbl
   })
+  output$p_splits <- renderDataTable({ datatable(p_splits_df(), options=dt_opts, rownames=FALSE) })
+  output$p_splits_png <- downloadHandler(
+    filename=function() "LRSplits.png",
+    content=function(file) save_table_png(file, p_splits_df())
+  )
 
-  output$p_count_usage <- renderDataTable({
+  p_count_usage_df <- reactive({
+
     d <- p_filt(); req(d, nrow(d)>0)
     counts <- d %>%
       mutate(Count=paste0(Balls,"-",Strikes)) %>%
@@ -1815,10 +1939,16 @@ server <- function(input, output, session) {
       tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
       rename(`Total Pitches`=N_count) %>%
       arrange(Count)
-    datatable(counts, options=dt_opts, rownames=FALSE)
+    counts
   })
+  output$p_count_usage <- renderDataTable({ datatable(p_count_usage_df(), options=dt_opts, rownames=FALSE) })
+  output$p_count_usage_png <- downloadHandler(
+    filename=function() "PitchUsageByCount.png",
+    content=function(file) save_table_png(file, p_count_usage_df())
+  )
 
-  output$p_lr_usage <- renderDataTable({
+  p_lr_usage_df <- reactive({
+
     d <- p_filt(); req(d, nrow(d)>0)
     lr <- d %>%
       group_by(Side=BatterSide) %>%
@@ -1829,10 +1959,15 @@ server <- function(input, output, session) {
       dplyr::select(Side, Pitch, Usage, N_side) %>%
       tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
       rename(`Total Pitches`=N_side)
-    datatable(lr, options=dt_opts, rownames=FALSE)
+    lr
   })
+  output$p_lr_usage <- renderDataTable({ datatable(p_lr_usage_df(), options=dt_opts, rownames=FALSE) })
+  output$p_lr_usage_png <- downloadHandler(
+    filename=function() "PitchUsageByLR.png",
+    content=function(file) save_table_png(file, p_lr_usage_df())
+  )
 
-  output$p_movement <- renderPlot({
+  p_movement_plot <- reactive({
     d<-p_filt();req(d,nrow(d)>0)
     ggplot(d,aes(x=HorzBreak,y=InducedVertBreak,color=TaggedPitchType))+
       geom_hline(yintercept=0,color="#2a2d3a",linewidth=.8)+
@@ -1844,9 +1979,14 @@ server <- function(input, output, session) {
       labs(title=paste(input$p_pitcher,"—",p_season(),"Movement"),
            x="Horizontal Break (in)",y="Induced Vertical Break (in)")+
       theme_navs()
-  }, bg="#0f1117")
+  })
+  output$p_movement <- renderPlot({ p_movement_plot() }, bg="#0f1117")
+  output$p_movement_png <- downloadHandler(
+    filename=function() "Movement.png",
+    content=function(file) save_plot_png(file, p_movement_plot(), width=8, height=7)
+  )
 
-  output$p_release <- renderPlot({
+  p_release_plot <- reactive({
     d<-p_filt();req(d,nrow(d)>0)
     ggplot(d,aes(x=RelSide,y=RelHeight,color=TaggedPitchType))+
       geom_point(size=2.5,alpha=.7)+
@@ -1855,7 +1995,12 @@ server <- function(input, output, session) {
       labs(title=paste(input$p_pitcher,"—",p_season(),"Release Points"),
            x="Horizontal Release (ft)",y="Vertical Release (ft)")+
       theme_navs()
-  }, bg="#0f1117")
+  })
+  output$p_release <- renderPlot({ p_release_plot() }, bg="#0f1117")
+  output$p_release_png <- downloadHandler(
+    filename=function() "ReleasePoints.png",
+    content=function(file) save_plot_png(file, p_release_plot(), width=8, height=6.5)
+  )
 
   # ── Pitch Sequencing ──────────────────────────────────────────────────────
   seq_clicked <- reactiveValues(first=NULL,second=NULL)
@@ -1877,7 +2022,7 @@ server <- function(input, output, session) {
     d
   })
 
-  output$p_seqMatrix <- renderPlot({
+  p_seqMatrix_plot <- reactive({
     d<-p_pairs_filt();req(d,nrow(d)>0)
     metric <- input$p_seq_metric%||%"csw_rate"
     all_types <- sort(unique(c(d$prev_type,d$TaggedPitchType)))
@@ -1899,7 +2044,12 @@ server <- function(input, output, session) {
             axis.text.x=element_text(angle=30,hjust=1,size=10,face="bold"),
             axis.text.y=element_text(size=10,face="bold"))+
       coord_fixed()
-  }, bg="#0f1117")
+  })
+  output$p_seqMatrix <- renderPlot({ p_seqMatrix_plot() }, bg="#0f1117")
+  output$p_seqMatrix_png <- downloadHandler(
+    filename=function() "SequencingMatrix.png",
+    content=function(file) save_plot_png(file, p_seqMatrix_plot(), width=9, height=9)
+  )
 
   observeEvent(input$p_mat_click,{
     req(input$p_pitcher,!is.null(p_pairs()))
@@ -1919,15 +2069,20 @@ server <- function(input, output, session) {
     if(!is.null(seq_clicked$second)) paste("2nd:",seq_clicked$second) else "2nd pitch (click)"
   })
 
-  output$p_seq_loc1 <- renderPlot({
+  p_seq_loc1_plot <- reactive({
     req(seq_clicked$first,input$p_pitcher,!is.null(p_seqs()))
     loc <- p_seqs()%>%filter(Pitcher==input$p_pitcher,prev_type==seq_clicked$first)%>%
       transmute(PlateLocSide=prev_loc_side,PlateLocHeight=prev_loc_height)%>%
       filter(!is.na(PlateLocSide),!is.na(PlateLocHeight))
     loc_heatmap(loc,paste0(seq_clicked$first,"\n(n=",nrow(loc),")"))
-  }, bg="#0f1117")
+  })
+  output$p_seq_loc1 <- renderPlot({ p_seq_loc1_plot() }, bg="#0f1117")
+  output$p_seq_loc1_png <- downloadHandler(
+    filename=function() "SeqLoc1.png",
+    content=function(file) save_plot_png(file, p_seq_loc1_plot(), width=5, height=4)
+  )
 
-  output$p_seq_loc2 <- renderPlot({
+  p_seq_loc2_plot <- reactive({
     req(seq_clicked$first,seq_clicked$second,input$p_pitcher,!is.null(p_seqs()))
     loc <- p_seqs()%>%filter(Pitcher==input$p_pitcher,
                               prev_type==seq_clicked$first,
@@ -1935,7 +2090,12 @@ server <- function(input, output, session) {
       dplyr::select(PlateLocSide,PlateLocHeight)%>%
       filter(!is.na(PlateLocSide),!is.na(PlateLocHeight))
     loc_heatmap(loc,paste0(seq_clicked$second,"\n(n=",nrow(loc),")"))
-  }, bg="#0f1117")
+  })
+  output$p_seq_loc2 <- renderPlot({ p_seq_loc2_plot() }, bg="#0f1117")
+  output$p_seq_loc2_png <- downloadHandler(
+    filename=function() "SeqLoc2.png",
+    content=function(file) save_plot_png(file, p_seq_loc2_plot(), width=5, height=4)
+  )
 
   output$p_seq_stats <- renderUI({
     req(seq_clicked$first,seq_clicked$second)
@@ -1964,7 +2124,7 @@ server <- function(input, output, session) {
     d<-p_filt();if(is.null(d)) return(NULL)
     selectInput("p_hm_count","Count / Situation",choices=count_choices(d$CountIndiv))
   })
-  output$p_heatmap <- renderPlot({
+  p_heatmap_plot <- reactive({
     d<-p_filt();req(d,nrow(d)>0)
     if(!is.null(input$p_hm_pitch)&&input$p_hm_pitch!="All Pitches")
       d <- d%>%filter(TaggedPitchType==input$p_hm_pitch)
@@ -1986,7 +2146,12 @@ server <- function(input, output, session) {
     } else {
       loc_heatmap(d,paste(input$p_pitcher,"—",p_season(),input$p_hm_pitch,"Heat Map"),sub)
     }
-  }, bg="#0f1117")
+  })
+  output$p_heatmap <- renderPlot({ p_heatmap_plot() }, bg="#0f1117")
+  output$p_heatmap_png <- downloadHandler(
+    filename=function() "PitcherHeatMap.png",
+    content=function(file) save_plot_png(file, p_heatmap_plot(), width=10, height=8)
+  )
 
   # ── Velocity / Spin ───────────────────────────────────────────────────────
   trend_plot <- function(d,y_col,y_lab,title_str){
@@ -2008,17 +2173,28 @@ server <- function(input, output, session) {
       labs(title=title_str,x="Pitch Count",y=y_lab,color="Pitch Type")+
       theme_navs()
   }
-  output$p_velo <- renderPlot({
+  p_velo_plot <- reactive({
     trend_plot(p_filt(),"RelSpeed","Velocity (MPH)",
                paste(input$p_pitcher,"—",p_season(),"Velocity"))
-  }, bg="#0f1117")
-  output$p_spin <- renderPlot({
+  })
+  output$p_velo <- renderPlot({ p_velo_plot() }, bg="#0f1117")
+  output$p_velo_png <- downloadHandler(
+    filename=function() "Velocity.png",
+    content=function(file) save_plot_png(file, p_velo_plot(), width=10, height=6)
+  )
+  p_spin_plot <- reactive({
     trend_plot(p_filt(),"SpinRate","Spin Rate (RPM)",
                paste(input$p_pitcher,"—",p_season(),"Spin Rate"))
-  }, bg="#0f1117")
+  })
+  output$p_spin <- renderPlot({ p_spin_plot() }, bg="#0f1117")
+  output$p_spin_png <- downloadHandler(
+    filename=function() "SpinRate.png",
+    content=function(file) save_plot_png(file, p_spin_plot(), width=10, height=6)
+  )
 
   # ── Count splits ──────────────────────────────────────────────────────────
-  output$p_countTable <- renderDataTable({
+  p_countTable_df <- reactive({
+
     d<-p_filt();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Count)%>%
       summarise(Pitches=n(),PA=sum(PACheck,na.rm=TRUE),AB=sum(ABCheck,na.rm=TRUE),
@@ -2030,9 +2206,15 @@ server <- function(input, output, session) {
       mutate(AVG=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
              OBP=sprintf("%.3f",ifelse(PA>0,(H+BB)/PA,NA)))%>%
       arrange(Count)
-    datatable(tbl,options=dt_opts,rownames=FALSE)
+    tbl
   })
-  output$p_ptHandTable <- renderDataTable({
+  output$p_countTable <- renderDataTable({ datatable(p_countTable_df(), options=dt_opts, rownames=FALSE) })
+  output$p_countTable_png <- downloadHandler(
+    filename=function() "ResultsByCount.png",
+    content=function(file) save_table_png(file, p_countTable_df())
+  )
+  p_ptHandTable_df <- reactive({
+
     d<-p_filt();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Pitch=TaggedPitchType,Side=BatterSide)%>%
       summarise(Pitches=n(),
@@ -2041,8 +2223,13 @@ server <- function(input, output, session) {
                 `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);
                            paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
                 `Avg Velo`=round(mean(RelSpeed,na.rm=TRUE),1),.groups="drop")
-    datatable(tbl,options=dt_opts,rownames=FALSE)
+    tbl
   })
+  output$p_ptHandTable <- renderDataTable({ datatable(p_ptHandTable_df(), options=dt_opts, rownames=FALSE) })
+  output$p_ptHandTable_png <- downloadHandler(
+    filename=function() "PitchTypeXBatterSide.png",
+    content=function(file) save_table_png(file, p_ptHandTable_df())
+  )
 
   # ── Batted Ball (pitcher) ─────────────────────────────────────────────────
   p_bb_data <- reactive({
@@ -2074,26 +2261,46 @@ server <- function(input, output, session) {
     d<-p_bb_data();req(nrow(d)>0)
     bb_card(sum(d$TaggedHitType=="Popup",na.rm=TRUE),nrow(d),"PU%")
   })
-  output$p_bb_totalTable <- renderDataTable({
+  p_bb_totalTable_df <- reactive({
+
     d<-p_bb_data();req(nrow(d)>0)
-    datatable(d%>%mutate(Total="All")%>%group_by(Total)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
+    d%>%mutate(Total="All")%>%group_by(Total)%>%bb_stats_fn()
   })
-  output$p_bb_ptTable <- renderDataTable({
+  output$p_bb_totalTable <- renderDataTable({ datatable(p_bb_totalTable_df(), options=dt_opts, rownames=FALSE) })
+  output$p_bb_totalTable_png <- downloadHandler(
+    filename=function() "BattedBall_Cumulative.png",
+    content=function(file) save_table_png(file, p_bb_totalTable_df())
+  )
+  p_bb_ptTable_df <- reactive({
+
     d<-p_bb_data();req(nrow(d)>0)
-    datatable(d%>%group_by(Pitch=TaggedPitchType)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
+    d%>%group_by(Pitch=TaggedPitchType)%>%bb_stats_fn()
   })
-  output$p_bb_lrTable <- renderDataTable({
+  output$p_bb_ptTable <- renderDataTable({ datatable(p_bb_ptTable_df(), options=dt_opts, rownames=FALSE) })
+  output$p_bb_ptTable_png <- downloadHandler(
+    filename=function() "BattedBall_ByPitchType.png",
+    content=function(file) save_table_png(file, p_bb_ptTable_df())
+  )
+  p_bb_lrTable_df <- reactive({
+
     d<-p_bb_data();req(nrow(d)>0)
-    datatable(d%>%group_by(Side=BatterSide)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
+    d%>%group_by(Side=BatterSide)%>%bb_stats_fn()
   })
-  output$p_bb_ptLrTable <- renderDataTable({
+  output$p_bb_lrTable <- renderDataTable({ datatable(p_bb_lrTable_df(), options=dt_opts, rownames=FALSE) })
+  output$p_bb_lrTable_png <- downloadHandler(
+    filename=function() "BattedBall_ByBatterSide.png",
+    content=function(file) save_table_png(file, p_bb_lrTable_df())
+  )
+  p_bb_ptLrTable_df <- reactive({
+
     d<-p_bb_data();req(nrow(d)>0)
-    datatable(d%>%group_by(Pitch=TaggedPitchType,Side=BatterSide)%>%bb_stats_fn(),
-              options=dt_opts,rownames=FALSE)
+    d%>%group_by(Pitch=TaggedPitchType,Side=BatterSide)%>%bb_stats_fn()
   })
+  output$p_bb_ptLrTable <- renderDataTable({ datatable(p_bb_ptLrTable_df(), options=dt_opts, rownames=FALSE) })
+  output$p_bb_ptLrTable_png <- downloadHandler(
+    filename=function() "BattedBall_PitchTypeXSide.png",
+    content=function(file) save_table_png(file, p_bb_ptLrTable_df())
+  )
 
   # ==========================================================================
   #  SCOUTING REPORTS
@@ -2175,7 +2382,8 @@ server <- function(input, output, session) {
   })
 
   # Team L/R splits
-  output$sr_team_lr <- renderDataTable({
+  sr_team_lr_df <- reactive({
+
     req(input$sr_team)
     if (input$sr_type == "hitter") {
       d <- sr_team_h_data()
@@ -2193,11 +2401,17 @@ server <- function(input, output, session) {
           .groups="drop"
         )
     }
-    datatable(tbl, options=dt_opts, rownames=FALSE)
+    tbl
   })
+  output$sr_team_lr <- renderDataTable({ datatable(sr_team_lr_df(), options=dt_opts, rownames=FALSE) })
+  output$sr_team_lr_png <- downloadHandler(
+    filename=function() "TeamLRSplits.png",
+    content=function(file) save_table_png(file, sr_team_lr_df())
+  )
 
   # Team by pitch type
-  output$sr_team_pt <- renderDataTable({
+  sr_team_pt_df <- reactive({
+
     req(input$sr_team)
     if (input$sr_type == "hitter") {
       d <- sr_team_h_data()
@@ -2219,11 +2433,17 @@ server <- function(input, output, session) {
           .groups="drop"
         ) %>% arrange(desc(N))
     }
-    datatable(tbl, options=dt_opts, rownames=FALSE)
+    tbl
   })
+  output$sr_team_pt <- renderDataTable({ datatable(sr_team_pt_df(), options=dt_opts, rownames=FALSE) })
+  output$sr_team_pt_png <- downloadHandler(
+    filename=function() "TeamByPitchType.png",
+    content=function(file) save_table_png(file, sr_team_pt_df())
+  )
 
   # Team by opponent
-  output$sr_team_opp <- renderDataTable({
+  sr_team_opp_df <- reactive({
+
     req(input$sr_team)
     if (input$sr_type == "hitter") {
       d <- sr_team_h_data()
@@ -2244,11 +2464,17 @@ server <- function(input, output, session) {
           .groups="drop"
         ) %>% arrange(desc(`CSW%`))
     }
-    datatable(tbl, options=dt_opts, rownames=FALSE)
+    tbl
   })
+  output$sr_team_opp <- renderDataTable({ datatable(sr_team_opp_df(), options=dt_opts, rownames=FALSE) })
+  output$sr_team_opp_png <- downloadHandler(
+    filename=function() "TeamByOpponent.png",
+    content=function(file) save_table_png(file, sr_team_opp_df())
+  )
 
   # Individual players ranked
-  output$sr_team_players <- renderDataTable({
+  sr_team_players_df <- reactive({
+
     req(input$sr_team)
     if (input$sr_type == "hitter") {
       d <- sr_team_h_data()
@@ -2270,8 +2496,13 @@ server <- function(input, output, session) {
           .groups="drop"
         ) %>% arrange(desc(`CSW%`))
     }
-    datatable(tbl, options=dt_opts, rownames=FALSE)
+    tbl
   })
+  output$sr_team_players <- renderDataTable({ datatable(sr_team_players_df(), options=dt_opts, rownames=FALSE) })
+  output$sr_team_players_png <- downloadHandler(
+    filename=function() "TeamPlayersRanked.png",
+    content=function(file) save_table_png(file, sr_team_players_df())
+  )
 
   # Pitcher / hitter section options
   pitcher_sections <- c(
@@ -2905,7 +3136,8 @@ server <- function(input, output, session) {
       dev.off()
     }
   )
-  output$lb_hitters <- renderDataTable({
+  lb_hitters_df <- reactive({
+
     req(!is.null(hitters_data()))
     d <- hitters_data() %>%
       filter(Season==as.integer(lb_season())) %>%
@@ -2930,10 +3162,16 @@ server <- function(input, output, session) {
       filter(PA>=min_pa)%>%
       arrange(desc(wOBA))%>%
       dplyr::select(Batter,Team,PA,BA,OBP,SLG,wOBA,HR,`2B`,`3B`,BB)
-    datatable(tbl,options=dt_opts,rownames=FALSE)
+    tbl
   })
+  output$lb_hitters <- renderDataTable({ datatable(lb_hitters_df(), options=dt_opts, rownames=FALSE) })
+  output$lb_hitters_png <- downloadHandler(
+    filename=function() "HitterLeaders.png",
+    content=function(file) save_table_png(file, lb_hitters_df())
+  )
 
-  output$lb_pitchers <- renderDataTable({
+  lb_pitchers_df <- reactive({
+
     req(!is.null(p_data_r()))
     d <- p_data_r()%>%filter(Season==as.integer(lb_season()))
     min_bf <- input$lb_min_bf%||%30
@@ -2952,10 +3190,16 @@ server <- function(input, output, session) {
       filter(BF>=min_bf)%>%
       arrange(desc(`CSW%`))%>%
       dplyr::select(Pitcher,Team,Pitches,BF,SO,BB,`CSW%`,`Zone%`,`Whiff%`,`Avg Velo`)
-    datatable(tbl,options=dt_opts,rownames=FALSE)
+    tbl
   })
+  output$lb_pitchers <- renderDataTable({ datatable(lb_pitchers_df(), options=dt_opts, rownames=FALSE) })
+  output$lb_pitchers_png <- downloadHandler(
+    filename=function() "PitcherLeaders.png",
+    content=function(file) save_table_png(file, lb_pitchers_df())
+  )
 
-  output$lb_team_hitting <- renderDataTable({
+  lb_team_hitting_df <- reactive({
+
     req(!is.null(hitters_data()))
     d <- hitters_data() %>%
       filter(Season==as.integer(lb_season())) %>%
@@ -2992,14 +3236,16 @@ server <- function(input, output, session) {
       )%>%
       arrange(desc(wOBA))%>%
       dplyr::select(Team,PA,BA,OBP,SLG,OPS,wOBA,HR,`2B`,BB,`K%`,`BB%`,`GB%`,`FB%`,`LD%`)
-    datatable(
-      tbl,
-      options=c(dt_opts, list(dom="ft", order=list(list(6,"desc")))),
-      rownames=FALSE
-    )
+    tbl
   })
+  output$lb_team_hitting <- renderDataTable({ datatable(lb_team_hitting_df(), options=c(dt_opts, list(dom="ft", order=list(list(6,"desc")))), rownames=FALSE) })
+  output$lb_team_hitting_png <- downloadHandler(
+    filename=function() "TeamHittingLeaders.png",
+    content=function(file) save_table_png(file, lb_team_hitting_df())
+  )
 
-  output$lb_team_pitching <- renderDataTable({
+  lb_team_pitching_df <- reactive({
+
     req(!is.null(p_data_r()))
     d <- p_data_r()%>%filter(Season==as.integer(lb_season()))
     tbl <- d%>%group_by(Team=PitcherTeamFull)%>%
@@ -3029,12 +3275,13 @@ server <- function(input, output, session) {
       arrange(desc(`CSW%`))%>%
       dplyr::select(Team,Pitches,BF,SO,BB,`K%`,`BB%`,`K-BB%`,
                     `CSW%`,`Zone%`,`Whiff%`,`Chase%`,`Avg Velo`,`GB%`,`FB%`)
-    datatable(
-      tbl,
-      options=c(dt_opts, list(dom="ft", order=list(list(8,"desc")))),
-      rownames=FALSE
-    )
+    tbl
   })
+  output$lb_team_pitching <- renderDataTable({ datatable(lb_team_pitching_df(), options=c(dt_opts, list(dom="ft", order=list(list(8,"desc")))), rownames=FALSE) })
+  output$lb_team_pitching_png <- downloadHandler(
+    filename=function() "TeamPitchingLeaders.png",
+    content=function(file) save_table_png(file, lb_team_pitching_df())
+  )
 }
 
 shinyApp(ui=ui, server=server)
