@@ -31,7 +31,8 @@ jobs:
       - name: Install R packages
         run: |
           install.packages(c(
-            "shiny", "dplyr", "readr", "ggplot2", "DT", "scales", "rsconnect"
+            "shiny", "dplyr", "tidyr", "readr", "ggplot2", "plotly",
+            "DT", "scales", "httr", "jsonlite", "rsconnect"
           ))
         shell: Rscript {0}
 
@@ -40,6 +41,14 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
           echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+
+      - name: Write admin credentials
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          echo "$ADMIN_PASSWORD" > admin_password.txt
+          echo "$GH_PAT" > gh_pat.txt
 
       - name: Deploy to shinyapps.io
         env:
