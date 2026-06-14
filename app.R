@@ -1600,11 +1600,12 @@ server <- function(input, output, session) {
       x = ~HorzBreak, y = ~InducedVertBreak,
       color = ~TaggedPitchType, colors = pal,
       type = "scatter", mode = "markers",
-      customdata = ~RowID,
+      key = ~RowID,
       marker = list(size=9, opacity=0.75),
       text = ~paste0(TaggedPitchType, "<br>Velo: ", round(RelSpeed,1),
                      "<br>Count: ", Balls, "-", Strikes),
-      hoverinfo = "text"
+      hoverinfo = "text",
+      source = "p_movement_select"
     ) %>%
       plotly::layout(
         title = list(text=paste(input$p_pitcher,"—",p_season(),"Movement (Admin)"),
@@ -1618,13 +1619,18 @@ server <- function(input, output, session) {
         dragmode="lasso"
       ) %>%
       plotly::config(displaylogo=FALSE,
-                     modeBarButtonsToAdd=c("lasso2d","select2d"))
+                     modeBarButtonsToAdd=c("lasso2d","select2d")) %>%
+      plotly::event_register("plotly_selected")
   })
 
-  observeEvent(plotly::event_data("plotly_selected", source="P"), {
-    sel <- plotly::event_data("plotly_selected", source="P")
-    if (!is.null(sel) && "customdata" %in% names(sel)) {
-      reclass_selected_ids(unique(as.character(sel$customdata)))
+  observeEvent(plotly::event_data("plotly_selected", source="p_movement_select"), {
+    sel <- plotly::event_data("plotly_selected", source="p_movement_select")
+    if (!is.null(sel)) {
+      if ("key" %in% names(sel)) {
+        reclass_selected_ids(unique(as.character(sel$key)))
+      } else if ("customdata" %in% names(sel)) {
+        reclass_selected_ids(unique(as.character(sel$customdata)))
+      }
     }
   })
 
