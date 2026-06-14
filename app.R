@@ -822,10 +822,15 @@ ui <- navbarPage(
           tabPanel("Movement & Release",
             br(),
             tags$div(class="section-header","Pitch Movement"),
+            tags$div(class="section-sub",
+              "Hover over a pitch to see its velocity, spin, and movement shape."),
+            tagList(png_dl_btn("p_movement_plotly_png"), plotly::plotlyOutput("p_movement_plotly",height="460px")),
             conditionalPanel("output.p_is_admin == true",
-              tags$div(class="section-sub",
-                "Admin mode: shows all pitches with valid movement data (including Undefined), regardless of the Pitch Type filter. Use the lasso or box-select tool to select pitches, then reclassify below."),
-              tagList(png_dl_btn("p_movement_plotly_png"), plotly::plotlyOutput("p_movement_plotly",height="460px")),
+              tags$div(class="section-sub",style="margin-top:8px;",
+                "Admin mode: check the box below to show all pitches with valid movement data (including Undefined), regardless of the Pitch Type filter. Use the lasso or box-select tool to select pitches, then reclassify below."),
+              checkboxInput("p_show_all_undefined",
+                            "Show all pitches incl. Undefined (ignore Pitch Type filter)",
+                            value=FALSE),
               br(),
               tags$div(class="filter-bar",
                 fluidRow(
@@ -846,9 +851,6 @@ ui <- navbarPage(
                 )
               ),
               uiOutput("p_reclass_status")
-            ),
-            conditionalPanel("output.p_is_admin != true",
-              tagList(png_dl_btn("p_movement_png"), plotOutput("p_movement",height="420px"))
             ),
             br(),
             tags$div(class="section-header","Release Points"),
@@ -1671,12 +1673,30 @@ server <- function(input, output, session) {
     d %>% filter(!is.na(HorzBreak), !is.na(InducedVertBreak))
   })
 
+  # Data source for the movement plot: respects sidebar filters (incl. Pitch Type)
+  # by default. Admins can toggle "show all incl. Undefined" to reveal everything
+  # for reclassification, regardless of the Pitch Type filter.
+  p_movement_data <- reactive({
+    if (is_admin() && isTRUE(input$p_show_all_undefined)) {
+      p_admin_data()
+    } else {
+      d <- p_filt()
+      if (is.null(d)) return(NULL)
+      d %>% filter(!is.na(HorzBreak), !is.na(InducedVertBreak))
+    }
+  })
+
   # Interactive plotly movement plot
   output$p_movement_plotly <- plotly::renderPlotly({
-    d <- p_admin_data(); req(d, nrow(d)>0)
+    d <- p_movement_data(); req(d, nrow(d)>0)
     pal <- pitch_pal[as.character(sort(unique(d$TaggedPitchType)))]
     pal[is.na(pal)] <- "#94a3b8"
     names(pal) <- sort(unique(d$TaggedPitchType))
+
+    plot_title <- if (is_admin() && isTRUE(input$p_show_all_undefined))
+      paste(input$p_pitcher,"—",p_season(),"Movement (All Pitches incl. Undefined)")
+    else
+      paste(input$p_pitcher,"—",p_season(),"Movement")
 
     plotly::plot_ly(
       data = d,
@@ -1695,7 +1715,7 @@ server <- function(input, output, session) {
       source = "p_movement_select"
     ) %>%
       plotly::layout(
-        title = list(text=paste(input$p_pitcher,"—",p_season(),"Movement (Admin)"),
+        title = list(text=plot_title,
                       font=list(color="#ffffff")),
         xaxis = list(title="Horizontal Break (in)", range=c(-30,30),
                      gridcolor="#2a2d3a", color="#b0b8d4", zerolinecolor="#2a2d3a"),
@@ -1710,21 +1730,25 @@ server <- function(input, output, session) {
       plotly::event_register("plotly_selected")
   })
 
-  # Static ggplot equivalent of the admin movement plot, for PNG export
+  # Static ggplot equivalent of the movement plot, for PNG export
   p_movement_plotly_plot <- reactive({
-    d <- p_admin_data(); req(d, nrow(d)>0)
+    d <- p_movement_data(); req(d, nrow(d)>0)
+    plot_title <- if (is_admin() && isTRUE(input$p_show_all_undefined))
+      paste(input$p_pitcher,"—",p_season(),"Movement (All Pitches incl. Undefined)")
+    else
+      paste(input$p_pitcher,"—",p_season(),"Movement")
     ggplot(d,aes(x=HorzBreak,y=InducedVertBreak,color=TaggedPitchType))+
       geom_hline(yintercept=0,color="#2a2d3a",linewidth=.8)+
       geom_vline(xintercept=0,color="#2a2d3a",linewidth=.8)+
       geom_point(size=2.5,alpha=.7)+
       scale_color_manual(values=pitch_pal,na.value="#94a3b8",name="Pitch Type")+
       xlim(-30,30)+ylim(-30,30)+
-      labs(title=paste(input$p_pitcher,"—",p_season(),"Movement (All Pitches incl. Undefined)"),
+      labs(title=plot_title,
            x="Horizontal Break (in)",y="Induced Vertical Break (in)")+
       theme_navs()
   })
   output$p_movement_plotly_png <- downloadHandler(
-    filename=function() "Movement_AdminView.png",
+    filename=function() "Movement.png",
     content=function(file) save_plot_png(file, p_movement_plotly_plot(), width=8, height=7)
   )
 
