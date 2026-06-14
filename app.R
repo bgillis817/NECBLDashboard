@@ -7,18 +7,100 @@
 
 library(shiny)
 library(dplyr)
+library(tidyr)
 library(readr)
 library(ggplot2)
+library(plotly)
 library(DT)
 library(scales)
 library(rmarkdown)
 library(knitr)
+library(httr)
+library(jsonlite)
 
 # ── Null coalesce ─────────────────────────────────────────────────────────────
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
 
 # ── Single combined CSV on GitHub ─────────────────────────────────────────────
 NECBL_CSV_URL <- "https://raw.githubusercontent.com/bgillis817/NECBLDashboard/main/NECBL_All.csv"
+GH_REPO       <- "bgillis817/NECBLDashboard"
+GH_BRANCH     <- "main"
+CORRECTIONS_PATH <- "corrections.csv"
+
+# ── Admin auth ─────────────────────────────────────────────────────────────────
+get_admin_password <- function() {
+  bundled <- "admin_password.txt"
+  if (file.exists(bundled)) {
+    pw <- trimws(readLines(bundled, n=1, warn=FALSE))
+    if (nchar(pw) > 0) return(pw)
+  }
+  Sys.getenv("ADMIN_PASSWORD")
+}
+
+get_github_pat <- function() {
+  bundled <- "gh_pat.txt"
+  if (file.exists(bundled)) {
+    pat <- trimws(readLines(bundled, n=1, warn=FALSE))
+    if (nchar(pat) > 0) return(pat)
+  }
+  Sys.getenv("GH_PAT")
+}
+
+# ── Push a row of corrections to corrections.csv on GitHub via Contents API ──
+push_corrections <- function(new_rows) {
+  pat <- get_github_pat()
+  if (nchar(pat) < 10) return(list(ok=FALSE, msg="No GitHub PAT configured"))
+
+  api_url <- paste0("https://api.github.com/repos/", GH_REPO,
+                    "/contents/", CORRECTIONS_PATH)
+
+  hdrs <- httr::add_headers(
+    Authorization = paste("token", pat),
+    Accept = "application/vnd.github+json"
+  )
+
+  # Try to get existing file (to get its sha + content)
+  existing <- httr::GET(api_url, hdrs, query=list(ref=GH_BRANCH))
+
+  if (httr::status_code(existing) == 200) {
+    body <- httr::content(existing, as="parsed")
+    sha  <- body$sha
+    raw_content <- rawToChar(jsonlite::base64_dec(gsub("\n","",body$content)))
+    existing_df <- tryCatch(
+      readr::read_csv(I(raw_content), show_col_types=FALSE),
+      error=function(e) NULL
+    )
+  } else {
+    sha <- NULL
+    existing_df <- NULL
+  }
+
+  combined <- if (!is.null(existing_df)) dplyr::bind_rows(existing_df, new_rows)
+              else new_rows
+
+  csv_str <- paste(capture.output(
+    write.csv(combined, stdout(), row.names=FALSE)
+  ), collapse="\n")
+  encoded <- jsonlite::base64_enc(csv_str)
+
+  payload <- list(
+    message = paste0("Add pitch reclassification corrections (",
+                     nrow(new_rows), " rows) - ", format(Sys.time())),
+    content = encoded,
+    branch  = GH_BRANCH
+  )
+  if (!is.null(sha)) payload$sha <- sha
+
+  resp <- httr::PUT(api_url, hdrs,
+                    body=jsonlite::toJSON(payload, auto_unbox=TRUE))
+
+  if (httr::status_code(resp) %in% c(200,201)) {
+    list(ok=TRUE, msg=paste0("Pushed ", nrow(new_rows), " correction(s) to GitHub"))
+  } else {
+    list(ok=FALSE, msg=paste0("GitHub API error: ", httr::status_code(resp), " — ",
+                              httr::content(resp, as="text")))
+  }
+}
 
 load_all_pitches <- function() {
   message("Loading NECBL_All.csv from GitHub...")
@@ -265,6 +347,11 @@ process_pitchers <- function(df) {
 load_and_cache <- function() {
   message("Loading data from GitHub...")
   raw <- load_all_pitches()
+  if (!is.null(raw) && nrow(raw) > 0) {
+    # Stable content-based key so corrections survive nightly re-loads
+    raw <- raw %>%
+      mutate(RowID = paste(Pitcher, Date, PitchNo, sep="__"))
+  }
   .raw_cache$raw_all            <- raw
   .raw_cache$hitters_processed  <- process_hitters(raw)
   pit                           <- process_pitchers(raw)
@@ -640,7 +727,12 @@ ui <- navbarPage(
         uiOutput("p_pitchTypeUI"),
         selectInput("p_batterSide","Batter Side",choices=c("All","Right","Left")),
         tags$hr(),
-        uiOutput("p_pitcherInfo")
+        uiOutput("p_pitcherInfo"),
+        tags$hr(),
+        tags$div(class="section-header",style="font-size:14px;","Admin Tools"),
+        passwordInput("p_admin_pw","Admin Password",value=""),
+        actionButton("p_admin_login","Unlock",class="btn-default btn-sm"),
+        uiOutput("p_admin_status")
       ),
       mainPanel(width=9,
         tabsetPanel(
@@ -660,12 +752,46 @@ ui <- navbarPage(
             dataTableOutput("p_results"),
             br(),
             tags$div(class="section-header","L / R Splits"),
-            dataTableOutput("p_splits")
+            dataTableOutput("p_splits"),
+            br(),
+            tags$div(class="section-header","Pitch Usage by Count"),
+            tags$div(class="section-sub","% of each pitch type thrown in each count"),
+            dataTableOutput("p_count_usage"),
+            br(),
+            tags$div(class="section-header","Pitch Usage vs L / R"),
+            tags$div(class="section-sub","% of each pitch type thrown vs each batter side"),
+            dataTableOutput("p_lr_usage")
           ),
           tabPanel("Movement & Release",
             br(),
             tags$div(class="section-header","Pitch Movement"),
-            plotOutput("p_movement",height="420px"),
+            conditionalPanel("output.p_is_admin == true",
+              tags$div(class="section-sub",
+                "Admin mode: use the lasso or box-select tool on the plot to select pitches, then reclassify below."),
+              plotly::plotlyOutput("p_movement_plotly",height="460px"),
+              br(),
+              tags$div(class="filter-bar",
+                fluidRow(
+                  column(3, uiOutput("p_reclass_count")),
+                  column(4,
+                    selectizeInput("p_reclass_newtype","New Pitch Type",
+                                   choices=NULL, options=list(create=TRUE))
+                  ),
+                  column(2,
+                    actionButton("p_reclass_apply","Apply",class="btn-primary",
+                                  style="margin-top:24px;")
+                  ),
+                  column(3,
+                    actionButton("p_reclass_push","Push Corrections to GitHub",
+                                  class="btn-default",style="margin-top:24px;")
+                  )
+                )
+              ),
+              uiOutput("p_reclass_status")
+            ),
+            conditionalPanel("output.p_is_admin != true",
+              plotOutput("p_movement",height="420px")
+            ),
             br(),
             tags$div(class="section-header","Release Points"),
             plotOutput("p_release",height="370px")
@@ -1419,6 +1545,165 @@ server <- function(input, output, session) {
     d
   })
 
+  # ── Admin login ────────────────────────────────────────────────────────────
+  is_admin <- reactiveVal(FALSE)
+
+  observeEvent(input$p_admin_login, {
+    pw <- get_admin_password()
+    if (nchar(pw) > 0 && !is.null(input$p_admin_pw) && input$p_admin_pw == pw) {
+      is_admin(TRUE)
+      showNotification("Admin mode unlocked.", type="message", duration=3)
+    } else {
+      is_admin(FALSE)
+      showNotification("Incorrect password.", type="error", duration=3)
+    }
+  })
+
+  output$p_is_admin <- reactive({ is_admin() })
+  outputOptions(output, "p_is_admin", suspendWhenHidden=FALSE)
+
+  output$p_admin_status <- renderUI({
+    if (is_admin())
+      tags$p(style="color:#4ECDC4;font-size:11px;margin-top:6px;","\u2713 Admin mode active")
+    else
+      tags$p(style="color:#6b7280;font-size:11px;margin-top:6px;","")
+  })
+
+  # ── Pitch reclassification (admin only) ────────────────────────────────────
+  reclass_selected_ids <- reactiveVal(character(0))
+  reclass_pending_log  <- reactiveVal(NULL)  # data.frame of applied corrections (this session)
+
+  # Interactive plotly movement plot
+  output$p_movement_plotly <- plotly::renderPlotly({
+    d <- p_filt(); req(d, nrow(d)>0)
+    pal <- pitch_pal[as.character(sort(unique(d$TaggedPitchType)))]
+    pal[is.na(pal)] <- "#94a3b8"
+
+    plotly::plot_ly(
+      data = d,
+      x = ~HorzBreak, y = ~InducedVertBreak,
+      color = ~TaggedPitchType, colors = pal,
+      type = "scatter", mode = "markers",
+      customdata = ~RowID,
+      marker = list(size=9, opacity=0.75),
+      text = ~paste0(TaggedPitchType, "<br>Velo: ", round(RelSpeed,1),
+                     "<br>Count: ", Balls, "-", Strikes),
+      hoverinfo = "text"
+    ) %>%
+      plotly::layout(
+        title = list(text=paste(input$p_pitcher,"—",p_season(),"Movement (Admin)"),
+                      font=list(color="#ffffff")),
+        xaxis = list(title="Horizontal Break (in)", range=c(-30,30),
+                     gridcolor="#2a2d3a", color="#b0b8d4", zerolinecolor="#2a2d3a"),
+        yaxis = list(title="Induced Vertical Break (in)", range=c(-30,30),
+                     gridcolor="#2a2d3a", color="#b0b8d4", zerolinecolor="#2a2d3a"),
+        paper_bgcolor="#0f1117", plot_bgcolor="#141720",
+        legend=list(font=list(color="#b0b8d4")),
+        dragmode="lasso"
+      ) %>%
+      plotly::config(displaylogo=FALSE,
+                     modeBarButtonsToAdd=c("lasso2d","select2d"))
+  })
+
+  observeEvent(plotly::event_data("plotly_selected", source="P"), {
+    sel <- plotly::event_data("plotly_selected", source="P")
+    if (!is.null(sel) && "customdata" %in% names(sel)) {
+      reclass_selected_ids(unique(as.character(sel$customdata)))
+    }
+  })
+
+  output$p_reclass_count <- renderUI({
+    n <- length(reclass_selected_ids())
+    tags$div(class="stat-card",
+      tags$h2(n),
+      tags$p("Pitches Selected"))
+  })
+
+  observeEvent(p_filt(), {
+    d <- p_filt()
+    if (!is.null(d) && nrow(d)>0) {
+      types <- sort(unique(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType)))
+      updateSelectizeInput(session,"p_reclass_newtype",
+                           choices=types, selected=types[1], server=FALSE)
+    }
+  })
+
+  observeEvent(input$p_reclass_apply, {
+    req(is_admin())
+    ids <- reclass_selected_ids()
+    new_type <- input$p_reclass_newtype
+    if (length(ids)==0 || is.null(new_type) || nchar(new_type)==0) {
+      showNotification("Select pitches and a pitch type first.", type="warning")
+      return()
+    }
+
+    # Update raw_all cache
+    raw <- .raw_cache$raw_all
+    idx <- which(raw$RowID %in% ids)
+    if (length(idx)==0) {
+      showNotification("No matching rows found in cache.", type="warning")
+      return()
+    }
+
+    log_rows <- data.frame(
+      RowID     = raw$RowID[idx],
+      Pitcher   = raw$Pitcher[idx],
+      Date      = as.character(raw$Date[idx]),
+      PitchNo   = raw$PitchNo[idx],
+      OldType   = raw$TaggedPitchType[idx],
+      NewType   = new_type,
+      Timestamp = format(Sys.time()),
+      stringsAsFactors = FALSE
+    )
+
+    raw$TaggedPitchType[idx] <- new_type
+    .raw_cache$raw_all <- raw
+
+    # Reprocess so all downstream reactives reflect the change
+    .raw_cache$hitters_processed <- process_hitters(raw)
+    pit <- process_pitchers(raw)
+    .raw_cache$pitchers_processed <- pit
+    .raw_cache$p_data_all  <- if (!is.null(pit)) pit$data      else NULL
+    .raw_cache$p_seqs_all  <- if (!is.null(pit)) pit$sequences else NULL
+    .raw_cache$p_pairs_all <- if (!is.null(pit)) pit$pairs     else NULL
+
+    # Accumulate session log
+    existing_log <- reclass_pending_log()
+    reclass_pending_log(if (is.null(existing_log)) log_rows else dplyr::bind_rows(existing_log, log_rows))
+
+    reclass_selected_ids(character(0))
+    refresh_trigger(refresh_trigger() + 1)
+
+    showNotification(paste0("Reclassified ", length(idx), " pitch(es) to ", new_type, "."),
+                     type="message", duration=4)
+  })
+
+  observeEvent(input$p_reclass_push, {
+    req(is_admin())
+    log <- reclass_pending_log()
+    if (is.null(log) || nrow(log)==0) {
+      showNotification("No pending corrections to push.", type="warning")
+      return()
+    }
+    showNotification("Pushing corrections to GitHub...", type="message",
+                     duration=NULL, id="pushing")
+    res <- push_corrections(log)
+    removeNotification("pushing")
+    if (res$ok) {
+      showNotification(res$msg, type="message", duration=5)
+      reclass_pending_log(NULL)
+    } else {
+      showNotification(res$msg, type="error", duration=8)
+    }
+  })
+
+  output$p_reclass_status <- renderUI({
+    log <- reclass_pending_log()
+    n <- if (is.null(log)) 0 else nrow(log)
+    tags$p(style="color:#8892b0;font-size:12px;margin-top:8px;",
+           paste0(n," correction(s) applied this session and pending push to GitHub."))
+  })
+
   output$p_card_n <- renderUI({
     d<-p_filt();req(d); stat_card(nrow(d),"Pitches")
   })
@@ -1485,6 +1770,36 @@ server <- function(input, output, session) {
       mutate(AVG=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
              OBP=sprintf("%.3f",ifelse(PA>0,(H+BB)/PA,NA)))
     datatable(tbl,options=dt_opts,rownames=FALSE)
+  })
+
+  output$p_count_usage <- renderDataTable({
+    d <- p_filt(); req(d, nrow(d)>0)
+    counts <- d %>%
+      mutate(Count=paste0(Balls,"-",Strikes)) %>%
+      group_by(Count) %>%
+      mutate(N_count=n()) %>%
+      group_by(Count, N_count, Pitch=TaggedPitchType) %>%
+      summarise(N_pitch=n(), .groups="drop") %>%
+      mutate(Usage=paste0(round(N_pitch/N_count*100,1),"%")) %>%
+      dplyr::select(Count, Pitch, Usage, N_count) %>%
+      tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
+      rename(`Total Pitches`=N_count) %>%
+      arrange(Count)
+    datatable(counts, options=dt_opts, rownames=FALSE)
+  })
+
+  output$p_lr_usage <- renderDataTable({
+    d <- p_filt(); req(d, nrow(d)>0)
+    lr <- d %>%
+      group_by(Side=BatterSide) %>%
+      mutate(N_side=n()) %>%
+      group_by(Side, N_side, Pitch=TaggedPitchType) %>%
+      summarise(N_pitch=n(), .groups="drop") %>%
+      mutate(Usage=paste0(round(N_pitch/N_side*100,1),"%")) %>%
+      dplyr::select(Side, Pitch, Usage, N_side) %>%
+      tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
+      rename(`Total Pitches`=N_side)
+    datatable(lr, options=dt_opts, rownames=FALSE)
   })
 
   output$p_movement <- renderPlot({
