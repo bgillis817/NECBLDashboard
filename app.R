@@ -18,6 +18,7 @@ library(knitr)
 library(httr)
 library(jsonlite)
 library(gridExtra)
+library(openxlsx)
 
 # ── Null coalesce ─────────────────────────────────────────────────────────────
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
@@ -495,10 +496,37 @@ save_plot_png <- function(file, p, width=10, height=7) {
   ggsave(file, p, width=width, height=height, dpi=200, bg="#0f1117", limitsize=FALSE)
 }
 
-# UI: small download-as-PNG link, placed above a table or plot
+# Save a data.frame as a formatted xlsx file
+save_table_xlsx <- function(file, tbl, sheet_name="Data") {
+  wb <- openxlsx::createWorkbook()
+  sheet_name <- substr(gsub("[^A-Za-z0-9 _-]","",sheet_name), 1, 31)
+  if (nchar(sheet_name)==0) sheet_name <- "Data"
+  openxlsx::addWorksheet(wb, sheet_name)
+  openxlsx::writeData(wb, sheet_name, tbl, withFilter=FALSE)
+  hdr_style <- openxlsx::createStyle(textDecoration="bold",
+                                     fgFill="#1e2235", fontColour="#FFFFFF",
+                                     halign="center", valign="center",
+                                     border="TopBottomLeftRight")
+  openxlsx::addStyle(wb, sheet_name, hdr_style, rows=1, cols=seq_len(ncol(tbl)), gridExpand=TRUE)
+  openxlsx::setColWidths(wb, sheet_name, cols=seq_len(ncol(tbl)), widths="auto")
+  openxlsx::freezePane(wb, sheet_name, firstRow=TRUE)
+  openxlsx::saveWorkbook(wb, file, overwrite=TRUE)
+}
+
+# UI: small download-as-PNG link, placed above a plot
 png_dl_btn <- function(id) {
   tags$div(style="text-align:right;margin-bottom:4px;",
     downloadLink(id, label=tagList(icon("download")," PNG"),
+                 style="color:#8892b0;font-size:11px;text-decoration:none;")
+  )
+}
+
+# UI: PNG + XLSX download links, placed above a table
+table_dl_btns <- function(id) {
+  tags$div(style="text-align:right;margin-bottom:4px;",
+    downloadLink(paste0(id,"_png"), label=tagList(icon("image")," PNG"),
+                 style="color:#8892b0;font-size:11px;text-decoration:none;margin-right:14px;"),
+    downloadLink(paste0(id,"_xlsx"), label=tagList(icon("file-excel")," XLSX"),
                  style="color:#8892b0;font-size:11px;text-decoration:none;")
   )
 }
@@ -701,13 +729,13 @@ ui <- navbarPage(
           tabPanel("Splits",
             br(),
             tags$div(class="section-header","Stats by Pitch Type"),
-            tagList(png_dl_btn("h_ptTable_png"), dataTableOutput("h_ptTable")),
+            tagList(table_dl_btns("h_ptTable"), dataTableOutput("h_ptTable")),
             br(),
             tags$div(class="section-header","Righty / Lefty Splits"),
-            tagList(png_dl_btn("h_lrTable_png"), dataTableOutput("h_lrTable")),
+            tagList(table_dl_btns("h_lrTable"), dataTableOutput("h_lrTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Handedness"),
-            tagList(png_dl_btn("h_ptLrTable_png"), dataTableOutput("h_ptLrTable"))
+            tagList(table_dl_btns("h_ptLrTable"), dataTableOutput("h_ptLrTable"))
           ),
           tabPanel("Batted Ball",
             br(),
@@ -728,16 +756,16 @@ ui <- navbarPage(
             ),
             br(),
             tags$div(class="section-header","Cumulative"),
-            tagList(png_dl_btn("h_bb_totalTable_png"), dataTableOutput("h_bb_totalTable")),
+            tagList(table_dl_btns("h_bb_totalTable"), dataTableOutput("h_bb_totalTable")),
             br(),
             tags$div(class="section-header","By Pitch Type"),
-            tagList(png_dl_btn("h_bb_ptTable_png"), dataTableOutput("h_bb_ptTable")),
+            tagList(table_dl_btns("h_bb_ptTable"), dataTableOutput("h_bb_ptTable")),
             br(),
             tags$div(class="section-header","By Handedness"),
-            tagList(png_dl_btn("h_bb_lrTable_png"), dataTableOutput("h_bb_lrTable")),
+            tagList(table_dl_btns("h_bb_lrTable"), dataTableOutput("h_bb_lrTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Handedness"),
-            tagList(png_dl_btn("h_bb_ptLrTable_png"), dataTableOutput("h_bb_ptLrTable"))
+            tagList(table_dl_btns("h_bb_ptLrTable"), dataTableOutput("h_bb_ptLrTable"))
           ),
           tabPanel("Heat Maps",
             br(),
@@ -803,21 +831,21 @@ ui <- navbarPage(
             ),
             br(),
             tags$div(class="section-header","Pitch Arsenal"),
-            tagList(png_dl_btn("p_arsenal_png"), dataTableOutput("p_arsenal")),
+            tagList(table_dl_btns("p_arsenal"), dataTableOutput("p_arsenal")),
             br(),
             tags$div(class="section-header","Results by Pitch Type"),
-            tagList(png_dl_btn("p_results_png"), dataTableOutput("p_results")),
+            tagList(table_dl_btns("p_results"), dataTableOutput("p_results")),
             br(),
             tags$div(class="section-header","L / R Splits"),
-            tagList(png_dl_btn("p_splits_png"), dataTableOutput("p_splits")),
+            tagList(table_dl_btns("p_splits"), dataTableOutput("p_splits")),
             br(),
             tags$div(class="section-header","Pitch Usage by Count"),
             tags$div(class="section-sub","% of each pitch type thrown in each count"),
-            tagList(png_dl_btn("p_count_usage_png"), dataTableOutput("p_count_usage")),
+            tagList(table_dl_btns("p_count_usage"), dataTableOutput("p_count_usage")),
             br(),
             tags$div(class="section-header","Pitch Usage vs L / R"),
             tags$div(class="section-sub","% of each pitch type thrown vs each batter side"),
-            tagList(png_dl_btn("p_lr_usage_png"), dataTableOutput("p_lr_usage"))
+            tagList(table_dl_btns("p_lr_usage"), dataTableOutput("p_lr_usage"))
           ),
           tabPanel("Movement & Release",
             br(),
@@ -918,10 +946,10 @@ ui <- navbarPage(
           tabPanel("Count Splits",
             br(),
             tags$div(class="section-header","Results by Count"),
-            tagList(png_dl_btn("p_countTable_png"), dataTableOutput("p_countTable")),
+            tagList(table_dl_btns("p_countTable"), dataTableOutput("p_countTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Batter Side"),
-            tagList(png_dl_btn("p_ptHandTable_png"), dataTableOutput("p_ptHandTable"))
+            tagList(table_dl_btns("p_ptHandTable"), dataTableOutput("p_ptHandTable"))
           ),
           tabPanel("Batted Ball",
             br(),
@@ -942,16 +970,16 @@ ui <- navbarPage(
             ),
             br(),
             tags$div(class="section-header","Cumulative"),
-            tagList(png_dl_btn("p_bb_totalTable_png"), dataTableOutput("p_bb_totalTable")),
+            tagList(table_dl_btns("p_bb_totalTable"), dataTableOutput("p_bb_totalTable")),
             br(),
             tags$div(class="section-header","By Pitch Type"),
-            tagList(png_dl_btn("p_bb_ptTable_png"), dataTableOutput("p_bb_ptTable")),
+            tagList(table_dl_btns("p_bb_ptTable"), dataTableOutput("p_bb_ptTable")),
             br(),
             tags$div(class="section-header","By Batter Side"),
-            tagList(png_dl_btn("p_bb_lrTable_png"), dataTableOutput("p_bb_lrTable")),
+            tagList(table_dl_btns("p_bb_lrTable"), dataTableOutput("p_bb_lrTable")),
             br(),
             tags$div(class="section-header","Pitch Type \u00d7 Batter Side"),
-            tagList(png_dl_btn("p_bb_ptLrTable_png"), dataTableOutput("p_bb_ptLrTable"))
+            tagList(table_dl_btns("p_bb_ptLrTable"), dataTableOutput("p_bb_ptLrTable"))
           )
         )
       )
@@ -989,24 +1017,24 @@ ui <- navbarPage(
       tabPanel("Hitter Leaders",
         br(),
         tags$div(class="section-header","Qualified Hitters — Ranked by wOBA"),
-        tagList(png_dl_btn("lb_hitters_png"), dataTableOutput("lb_hitters"))
+        tagList(table_dl_btns("lb_hitters"), dataTableOutput("lb_hitters"))
       ),
       tabPanel("Pitcher Leaders",
         br(),
         tags$div(class="section-header","Qualified Pitchers — Ranked by CSW%"),
-        tagList(png_dl_btn("lb_pitchers_png"), dataTableOutput("lb_pitchers"))
+        tagList(table_dl_btns("lb_pitchers"), dataTableOutput("lb_pitchers"))
       ),
       tabPanel("Team Hitting",
         br(),
         tags$div(class="section-header","Cumulative Team Hitting Stats"),
         tags$div(class="section-sub","Click any column header to sort"),
-        tagList(png_dl_btn("lb_team_hitting_png"), dataTableOutput("lb_team_hitting"))
+        tagList(table_dl_btns("lb_team_hitting"), dataTableOutput("lb_team_hitting"))
       ),
       tabPanel("Team Pitching",
         br(),
         tags$div(class="section-header","Cumulative Team Pitching Stats"),
         tags$div(class="section-sub","Click any column header to sort"),
-        tagList(png_dl_btn("lb_team_pitching_png"), dataTableOutput("lb_team_pitching"))
+        tagList(table_dl_btns("lb_team_pitching"), dataTableOutput("lb_team_pitching"))
       )
     )
   ),
@@ -1084,18 +1112,18 @@ ui <- navbarPage(
               uiOutput("sr_team_stat_cards"),
               br(),
               tags$div(class="section-header","L/R Splits"),
-              tagList(png_dl_btn("sr_team_lr_png"), dataTableOutput("sr_team_lr")),
+              tagList(table_dl_btns("sr_team_lr"), dataTableOutput("sr_team_lr")),
               br(),
               tags$div(class="section-header","By Pitch Type"),
-              tagList(png_dl_btn("sr_team_pt_png"), dataTableOutput("sr_team_pt")),
+              tagList(table_dl_btns("sr_team_pt"), dataTableOutput("sr_team_pt")),
               br(),
               tags$div(class="section-header","By Opponent"),
-              tagList(png_dl_btn("sr_team_opp_png"), dataTableOutput("sr_team_opp"))
+              tagList(table_dl_btns("sr_team_opp"), dataTableOutput("sr_team_opp"))
             ),
             tabPanel("Individual Players",
               br(),
               tags$div(class="section-sub","Ranked by wOBA (hitters) or CSW% (pitchers)"),
-              tagList(png_dl_btn("sr_team_players_png"), dataTableOutput("sr_team_players"))
+              tagList(table_dl_btns("sr_team_players"), dataTableOutput("sr_team_players"))
             )
           )
         ),
@@ -1171,7 +1199,9 @@ server <- function(input, output, session) {
   output$h_teamSelect <- renderUI({
     req(!is.null(h_raw()), nrow(h_raw())>0)
     teams <- sort(unique(h_raw()$BatterTeamFull))
-    selectInput("h_team","Select Team", choices=teams, selectize=TRUE)
+    prev <- isolate(input$h_team)
+    sel  <- if (!is.null(prev) && prev %in% teams) prev else teams[1]
+    selectInput("h_team","Select Team", choices=teams, selected=sel, selectize=TRUE)
   })
 
   output$h_playerSelect <- renderUI({
@@ -1193,8 +1223,10 @@ server <- function(input, output, session) {
 
   output$h_pitchTypeUI <- renderUI({
     req(!is.null(h_raw()))
-    selectInput("h_pitchType","Pitch Type",
-                choices=c("All",sort(unique(h_raw()$TaggedPitchType))))
+    choices <- c("All",sort(unique(h_raw()$TaggedPitchType)))
+    prev <- isolate(input$h_pitchType)
+    sel  <- if (!is.null(prev) && prev %in% choices) prev else "All"
+    selectInput("h_pitchType","Pitch Type", choices=choices, selected=sel)
   })
 
   output$h_playerInfo <- renderUI({
@@ -1465,10 +1497,16 @@ server <- function(input, output, session) {
 
   output$h_ptTable_png   <- downloadHandler(filename=function() "PitchTypeSplits.png",
     content=function(file) save_table_png(file, h_ptTable_df(), "Stats by Pitch Type"))
+  output$h_ptTable_xlsx <- downloadHandler(filename=function() "PitchTypeSplits.xlsx",
+    content=function(file) save_table_xlsx(file, h_ptTable_df(), "Stats by Pitch Type"))
   output$h_lrTable_png   <- downloadHandler(filename=function() "LRSplits.png",
     content=function(file) save_table_png(file, h_lrTable_df(), "Righty / Lefty Splits"))
+  output$h_lrTable_xlsx <- downloadHandler(filename=function() "LRSplits.xlsx",
+    content=function(file) save_table_xlsx(file, h_lrTable_df(), "Righty / Lefty Splits"))
   output$h_ptLrTable_png <- downloadHandler(filename=function() "PitchTypeXHandedness.png",
     content=function(file) save_table_png(file, h_ptLrTable_df(), "Pitch Type x Handedness"))
+  output$h_ptLrTable_xlsx <- downloadHandler(filename=function() "PitchTypeXHandedness.xlsx",
+    content=function(file) save_table_xlsx(file, h_ptLrTable_df(), "Pitch Type x Handedness"))
 
   # ── Batted Ball (hitter) ──────────────────────────────────────────────────
   h_bb_data <- reactive({
@@ -1513,12 +1551,20 @@ server <- function(input, output, session) {
 
   output$h_bb_totalTable_png <- downloadHandler(filename=function() "BattedBall_Cumulative.png",
     content=function(file) save_table_png(file, h_bb_totalTable_df(), "Batted Ball — Cumulative"))
+  output$h_bb_totalTable_xlsx <- downloadHandler(filename=function() "BattedBall_Cumulative.xlsx",
+    content=function(file) save_table_xlsx(file, h_bb_totalTable_df(), "Batted Ball — Cumulative"))
   output$h_bb_ptTable_png    <- downloadHandler(filename=function() "BattedBall_ByPitchType.png",
     content=function(file) save_table_png(file, h_bb_ptTable_df(), "Batted Ball — By Pitch Type"))
+  output$h_bb_ptTable_xlsx <- downloadHandler(filename=function() "BattedBall_ByPitchType.xlsx",
+    content=function(file) save_table_xlsx(file, h_bb_ptTable_df(), "Batted Ball — By Pitch Type"))
   output$h_bb_lrTable_png    <- downloadHandler(filename=function() "BattedBall_ByHandedness.png",
     content=function(file) save_table_png(file, h_bb_lrTable_df(), "Batted Ball — By Handedness"))
+  output$h_bb_lrTable_xlsx <- downloadHandler(filename=function() "BattedBall_ByHandedness.xlsx",
+    content=function(file) save_table_xlsx(file, h_bb_lrTable_df(), "Batted Ball — By Handedness"))
   output$h_bb_ptLrTable_png  <- downloadHandler(filename=function() "BattedBall_PitchTypeXHand.png",
     content=function(file) save_table_png(file, h_bb_ptLrTable_df(), "Batted Ball — Pitch Type x Handedness"))
+  output$h_bb_ptLrTable_xlsx <- downloadHandler(filename=function() "BattedBall_PitchTypeXHand.xlsx",
+    content=function(file) save_table_xlsx(file, h_bb_ptLrTable_df(), "Batted Ball — Pitch Type x Handedness"))
 
   # ── Heat maps (hitter) ────────────────────────────────────────────────────
   output$h_hm_pitch_ui <- renderUI({
@@ -1568,7 +1614,9 @@ server <- function(input, output, session) {
   output$p_teamSelect <- renderUI({
     req(!is.null(p_raw()),nrow(p_raw())>0)
     teams <- sort(unique(p_raw()$PitcherTeamFull))
-    selectInput("p_team","Select Team",choices=teams,selectize=TRUE)
+    prev <- isolate(input$p_team)
+    sel  <- if(!is.null(prev)&&prev%in%teams) prev else teams[1]
+    selectInput("p_team","Select Team",choices=teams,selected=sel,selectize=TRUE)
   })
 
   output$p_playerSelect <- renderUI({
@@ -1584,9 +1632,12 @@ server <- function(input, output, session) {
     req(input$p_pitcher,!is.null(p_raw()))
     dates <- sort(unique(p_raw()%>%filter(Pitcher==input$p_pitcher)%>%pull(Date)))
     choices <- setNames(as.character(dates),format(dates,"%m/%d/%Y"))
+    prev <- isolate(input$p_dates)
+    sel  <- if (!is.null(prev) && length(prev)>0 && all(prev %in% choices))
+              prev else as.character(dates)
     tagList(
       checkboxGroupInput("p_dates","Select Outing(s)",
-                         choices=choices,selected=as.character(dates)),
+                         choices=choices,selected=sel),
       fluidRow(
         column(6,actionButton("p_selAll","All",class="btn-default btn-sm")),
         column(6,actionButton("p_selNone","Clear",class="btn-default btn-sm"))
@@ -1596,8 +1647,10 @@ server <- function(input, output, session) {
 
   output$p_pitchTypeUI <- renderUI({
     req(!is.null(p_raw()))
-    selectInput("p_pitchType","Pitch Type",
-                choices=c("All",sort(unique(p_raw()$TaggedPitchType))))
+    choices <- c("All",sort(unique(p_raw()$TaggedPitchType)))
+    prev <- isolate(input$p_pitchType)
+    sel  <- if (!is.null(prev) && prev %in% choices) prev else "All"
+    selectInput("p_pitchType","Pitch Type", choices=choices, selected=sel)
   })
 
   output$p_pitcherInfo <- renderUI({
@@ -1906,6 +1959,10 @@ server <- function(input, output, session) {
     filename=function() "PitchArsenal.png",
     content=function(file) save_table_png(file, p_arsenal_df())
   )
+  output$p_arsenal_xlsx <- downloadHandler(
+    filename=function() "PitchArsenal.xlsx",
+    content=function(file) save_table_xlsx(file, p_arsenal_df(), "Pitch Arsenal")
+  )
 
   p_results_df <- reactive({
 
@@ -1929,6 +1986,10 @@ server <- function(input, output, session) {
     filename=function() "ResultsByPitchType.png",
     content=function(file) save_table_png(file, p_results_df())
   )
+  output$p_results_xlsx <- downloadHandler(
+    filename=function() "ResultsByPitchType.xlsx",
+    content=function(file) save_table_xlsx(file, p_results_df(), "Results by Pitch Type")
+  )
 
   p_splits_df <- reactive({
 
@@ -1947,6 +2008,10 @@ server <- function(input, output, session) {
   output$p_splits_png <- downloadHandler(
     filename=function() "LRSplits.png",
     content=function(file) save_table_png(file, p_splits_df())
+  )
+  output$p_splits_xlsx <- downloadHandler(
+    filename=function() "LRSplits.xlsx",
+    content=function(file) save_table_xlsx(file, p_splits_df(), "L/R Splits")
   )
 
   p_count_usage_df <- reactive({
@@ -1970,6 +2035,10 @@ server <- function(input, output, session) {
     filename=function() "PitchUsageByCount.png",
     content=function(file) save_table_png(file, p_count_usage_df())
   )
+  output$p_count_usage_xlsx <- downloadHandler(
+    filename=function() "PitchUsageByCount.xlsx",
+    content=function(file) save_table_xlsx(file, p_count_usage_df(), "Pitch Usage by Count")
+  )
 
   p_lr_usage_df <- reactive({
 
@@ -1989,6 +2058,10 @@ server <- function(input, output, session) {
   output$p_lr_usage_png <- downloadHandler(
     filename=function() "PitchUsageByLR.png",
     content=function(file) save_table_png(file, p_lr_usage_df())
+  )
+  output$p_lr_usage_xlsx <- downloadHandler(
+    filename=function() "PitchUsageByLR.xlsx",
+    content=function(file) save_table_xlsx(file, p_lr_usage_df(), "Pitch Usage by L/R")
   )
 
   p_movement_plot <- reactive({
@@ -2237,6 +2310,10 @@ server <- function(input, output, session) {
     filename=function() "ResultsByCount.png",
     content=function(file) save_table_png(file, p_countTable_df())
   )
+  output$p_countTable_xlsx <- downloadHandler(
+    filename=function() "ResultsByCount.xlsx",
+    content=function(file) save_table_xlsx(file, p_countTable_df(), "Results by Count")
+  )
   p_ptHandTable_df <- reactive({
 
     d<-p_filt();req(d,nrow(d)>0)
@@ -2253,6 +2330,10 @@ server <- function(input, output, session) {
   output$p_ptHandTable_png <- downloadHandler(
     filename=function() "PitchTypeXBatterSide.png",
     content=function(file) save_table_png(file, p_ptHandTable_df())
+  )
+  output$p_ptHandTable_xlsx <- downloadHandler(
+    filename=function() "PitchTypeXBatterSide.xlsx",
+    content=function(file) save_table_xlsx(file, p_ptHandTable_df(), "Pitch Type x Batter Side")
   )
 
   # ── Batted Ball (pitcher) ─────────────────────────────────────────────────
@@ -2295,6 +2376,10 @@ server <- function(input, output, session) {
     filename=function() "BattedBall_Cumulative.png",
     content=function(file) save_table_png(file, p_bb_totalTable_df())
   )
+  output$p_bb_totalTable_xlsx <- downloadHandler(
+    filename=function() "BattedBall_Cumulative.xlsx",
+    content=function(file) save_table_xlsx(file, p_bb_totalTable_df(), "Batted Ball Cumulative")
+  )
   p_bb_ptTable_df <- reactive({
 
     d<-p_bb_data();req(nrow(d)>0)
@@ -2304,6 +2389,10 @@ server <- function(input, output, session) {
   output$p_bb_ptTable_png <- downloadHandler(
     filename=function() "BattedBall_ByPitchType.png",
     content=function(file) save_table_png(file, p_bb_ptTable_df())
+  )
+  output$p_bb_ptTable_xlsx <- downloadHandler(
+    filename=function() "BattedBall_ByPitchType.xlsx",
+    content=function(file) save_table_xlsx(file, p_bb_ptTable_df(), "Batted Ball by Pitch Type")
   )
   p_bb_lrTable_df <- reactive({
 
@@ -2315,6 +2404,10 @@ server <- function(input, output, session) {
     filename=function() "BattedBall_ByBatterSide.png",
     content=function(file) save_table_png(file, p_bb_lrTable_df())
   )
+  output$p_bb_lrTable_xlsx <- downloadHandler(
+    filename=function() "BattedBall_ByBatterSide.xlsx",
+    content=function(file) save_table_xlsx(file, p_bb_lrTable_df(), "Batted Ball by Batter Side")
+  )
   p_bb_ptLrTable_df <- reactive({
 
     d<-p_bb_data();req(nrow(d)>0)
@@ -2324,6 +2417,10 @@ server <- function(input, output, session) {
   output$p_bb_ptLrTable_png <- downloadHandler(
     filename=function() "BattedBall_PitchTypeXSide.png",
     content=function(file) save_table_png(file, p_bb_ptLrTable_df())
+  )
+  output$p_bb_ptLrTable_xlsx <- downloadHandler(
+    filename=function() "BattedBall_PitchTypeXSide.xlsx",
+    content=function(file) save_table_xlsx(file, p_bb_ptLrTable_df(), "Batted Ball Pitch x Side")
   )
 
   # ==========================================================================
@@ -2432,6 +2529,10 @@ server <- function(input, output, session) {
     filename=function() "TeamLRSplits.png",
     content=function(file) save_table_png(file, sr_team_lr_df())
   )
+  output$sr_team_lr_xlsx <- downloadHandler(
+    filename=function() "TeamLRSplits.xlsx",
+    content=function(file) save_table_xlsx(file, sr_team_lr_df(), "Team L-R Splits")
+  )
 
   # Team by pitch type
   sr_team_pt_df <- reactive({
@@ -2464,6 +2565,10 @@ server <- function(input, output, session) {
     filename=function() "TeamByPitchType.png",
     content=function(file) save_table_png(file, sr_team_pt_df())
   )
+  output$sr_team_pt_xlsx <- downloadHandler(
+    filename=function() "TeamByPitchType.xlsx",
+    content=function(file) save_table_xlsx(file, sr_team_pt_df(), "Team by Pitch Type")
+  )
 
   # Team by opponent
   sr_team_opp_df <- reactive({
@@ -2494,6 +2599,10 @@ server <- function(input, output, session) {
   output$sr_team_opp_png <- downloadHandler(
     filename=function() "TeamByOpponent.png",
     content=function(file) save_table_png(file, sr_team_opp_df())
+  )
+  output$sr_team_opp_xlsx <- downloadHandler(
+    filename=function() "TeamByOpponent.xlsx",
+    content=function(file) save_table_xlsx(file, sr_team_opp_df(), "Team by Opponent")
   )
 
   # Individual players ranked
@@ -2526,6 +2635,10 @@ server <- function(input, output, session) {
   output$sr_team_players_png <- downloadHandler(
     filename=function() "TeamPlayersRanked.png",
     content=function(file) save_table_png(file, sr_team_players_df())
+  )
+  output$sr_team_players_xlsx <- downloadHandler(
+    filename=function() "TeamPlayersRanked.xlsx",
+    content=function(file) save_table_xlsx(file, sr_team_players_df(), "Team Players Ranked")
   )
 
   # Pitcher / hitter section options
@@ -3193,6 +3306,10 @@ server <- function(input, output, session) {
     filename=function() "HitterLeaders.png",
     content=function(file) save_table_png(file, lb_hitters_df())
   )
+  output$lb_hitters_xlsx <- downloadHandler(
+    filename=function() "HitterLeaders.xlsx",
+    content=function(file) save_table_xlsx(file, lb_hitters_df(), "Hitter Leaders")
+  )
 
   lb_pitchers_df <- reactive({
 
@@ -3220,6 +3337,10 @@ server <- function(input, output, session) {
   output$lb_pitchers_png <- downloadHandler(
     filename=function() "PitcherLeaders.png",
     content=function(file) save_table_png(file, lb_pitchers_df())
+  )
+  output$lb_pitchers_xlsx <- downloadHandler(
+    filename=function() "PitcherLeaders.xlsx",
+    content=function(file) save_table_xlsx(file, lb_pitchers_df(), "Pitcher Leaders")
   )
 
   lb_team_hitting_df <- reactive({
@@ -3267,6 +3388,10 @@ server <- function(input, output, session) {
     filename=function() "TeamHittingLeaders.png",
     content=function(file) save_table_png(file, lb_team_hitting_df())
   )
+  output$lb_team_hitting_xlsx <- downloadHandler(
+    filename=function() "TeamHittingLeaders.xlsx",
+    content=function(file) save_table_xlsx(file, lb_team_hitting_df(), "Team Hitting Leaders")
+  )
 
   lb_team_pitching_df <- reactive({
 
@@ -3305,6 +3430,10 @@ server <- function(input, output, session) {
   output$lb_team_pitching_png <- downloadHandler(
     filename=function() "TeamPitchingLeaders.png",
     content=function(file) save_table_png(file, lb_team_pitching_df())
+  )
+  output$lb_team_pitching_xlsx <- downloadHandler(
+    filename=function() "TeamPitchingLeaders.xlsx",
+    content=function(file) save_table_xlsx(file, lb_team_pitching_df(), "Team Pitching Leaders")
   )
 }
 
