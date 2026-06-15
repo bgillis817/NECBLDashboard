@@ -843,6 +843,14 @@ ui <- navbarPage(
             tags$div(class="section-sub","% of each pitch type thrown in each count"),
             tagList(table_dl_btns("p_count_usage"), dataTableOutput("p_count_usage")),
             br(),
+            tags$div(class="section-header","Pitch Usage by Count Situation"),
+            tags$div(class="section-sub",
+              "% of each pitch type thrown in each count situation (First Pitch, Hitter's Count, Pitcher's Count, Even, Two Strikes)"),
+            radioButtons("p_bucket_split","Breakdown",
+                         choices=c("Overall"="none","Split by Batter Side"="hand"),
+                         selected="none", inline=TRUE),
+            tagList(table_dl_btns("p_count_bucket_usage"), dataTableOutput("p_count_bucket_usage")),
+            br(),
             tags$div(class="section-header","Pitch Usage vs L / R"),
             tags$div(class="section-sub","% of each pitch type thrown vs each batter side"),
             tagList(table_dl_btns("p_lr_usage"), dataTableOutput("p_lr_usage"))
@@ -2034,6 +2042,55 @@ server <- function(input, output, session) {
   output$p_count_usage_png <- downloadHandler(
     filename=function() "PitchUsageByCount.png",
     content=function(file) save_table_png(file, p_count_usage_df())
+  )
+
+  # ── Pitch Usage by Count Bucket (First Pitch, Hitter's/Pitcher's Count, Even, Two Strikes) ──
+  p_count_bucket_usage_df <- reactive({
+    d <- p_filt(); req(d, nrow(d)>0)
+
+    d <- d %>%
+      mutate(Bucket = dplyr::case_when(
+        Balls==0 & Strikes==0 ~ "First Pitch",
+        Strikes==2            ~ "Two Strikes",
+        Balls > Strikes       ~ "Hitter's Count",
+        Strikes > Balls       ~ "Pitcher's Count",
+        Balls == Strikes      ~ "Even Count",
+        TRUE                  ~ "Other"
+      ))
+
+    bucket_order <- c("First Pitch","Hitter's Count","Pitcher's Count","Even Count","Two Strikes","Other")
+
+    if (!is.null(input$p_bucket_split) && input$p_bucket_split=="hand") {
+      d <- d %>% mutate(GroupCol = paste0(Bucket, " — vs ", BatterSide))
+    } else {
+      d <- d %>% mutate(GroupCol = Bucket)
+    }
+
+    out <- d %>%
+      group_by(GroupCol, Bucket) %>%
+      mutate(N_group=n()) %>%
+      group_by(GroupCol, Bucket, N_group, Pitch=TaggedPitchType) %>%
+      summarise(N_pitch=n(), .groups="drop") %>%
+      mutate(Usage=paste0(round(N_pitch/N_group*100,1),"%")) %>%
+      dplyr::select(GroupCol, Bucket, Pitch, Usage, N_group) %>%
+      tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
+      rename(`Total Pitches`=N_group)
+
+    out$Bucket <- factor(out$Bucket, levels=bucket_order)
+    out <- out %>% arrange(Bucket, GroupCol) %>%
+      rename(`Count Situation`=GroupCol) %>%
+      dplyr::select(-Bucket)
+
+    out
+  })
+  output$p_count_bucket_usage <- renderDataTable({ datatable(p_count_bucket_usage_df(), options=dt_opts, rownames=FALSE) })
+  output$p_count_bucket_usage_png <- downloadHandler(
+    filename=function() "PitchUsageByCountBucket.png",
+    content=function(file) save_table_png(file, p_count_bucket_usage_df())
+  )
+  output$p_count_bucket_usage_xlsx <- downloadHandler(
+    filename=function() "PitchUsageByCountBucket.xlsx",
+    content=function(file) save_table_xlsx(file, p_count_bucket_usage_df(), "Usage by Count Bucket")
   )
   output$p_count_usage_xlsx <- downloadHandler(
     filename=function() "PitchUsageByCount.xlsx",
