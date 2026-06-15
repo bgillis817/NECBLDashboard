@@ -32,7 +32,7 @@ jobs:
         run: |
           install.packages(c(
             "shiny", "dplyr", "tidyr", "readr", "ggplot2", "plotly",
-            "DT", "scales", "httr", "jsonlite", "gridExtra", "rsconnect"
+            "DT", "scales", "httr", "jsonlite", "gridExtra", "openxlsx", "rsconnect"
           ))
         shell: Rscript {0}
 
