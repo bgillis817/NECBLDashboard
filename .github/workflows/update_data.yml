@@ -108,7 +108,8 @@ jobs:
               combined['Date'] = combined['Date'].dt.strftime('%Y-%m-%d')
 
               combined.to_csv(existing_path, index=False)
-              print(f"Updated NECBL_All.csv: {len(combined)} rows, {combined['Date'].dt.year.value_counts().to_dict()}")
+              year_counts = combined['Date'].str[:4].value_counts().to_dict()
+              print(f"Updated NECBL_All.csv: {len(combined)} rows, ***{year_counts}***")
 
               # Update loaded files tracker
               all_loaded = loaded_names | set(new_names)
