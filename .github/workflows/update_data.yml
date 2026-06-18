@@ -101,9 +101,11 @@ jobs:
               # Append new data
               combined = pd.concat([existing] + new_dfs, ignore_index=True)
 
-              # Keep only 2025-2026
+              # Normalize dates and keep only 2025+
               combined['Date'] = pd.to_datetime(combined['Date'], errors='coerce')
               combined = combined[combined['Date'].dt.year >= 2025]
+              # Save dates in consistent ISO format to avoid re-parse issues
+              combined['Date'] = combined['Date'].dt.strftime('%Y-%m-%d')
 
               combined.to_csv(existing_path, index=False)
               print(f"Updated NECBL_All.csv: {len(combined)} rows, {combined['Date'].dt.year.value_counts().to_dict()}")
@@ -159,7 +161,7 @@ jobs:
 
                   data.loc[matched, 'TaggedPitchType'] = data.loc[matched, '_RowID'].map(type_map)
                   data = data.drop(columns=['_RowID'])
-                  data['Date'] = data['Date'].dt.strftime('%m/%d/%Y')
+                  data['Date'] = data['Date'].dt.strftime('%Y-%m-%d')
 
                   data.to_csv(data_path, index=False)
                   print(f"Applied {n_matched} corrections out of {len(corrections)} logged")
