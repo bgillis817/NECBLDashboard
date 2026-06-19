@@ -95,11 +95,29 @@ jobs:
               except Exception as e:
                   print(f"  ! Skipped {file['name']}: {e}")
 
+          # Only keep columns the app actually needs
+          KEEP_COLS = [
+              'PitchNo','Date','Time','PAofInning','PitchofPA',
+              'Pitcher','PitcherId','PitcherThrows','PitcherTeam',
+              'Batter','BatterId','BatterSide','BatterTeam',
+              'Inning','Top/Bottom','Outs','Balls','Strikes',
+              'TaggedPitchType','AutoPitchType','PitchCall','KorBB',
+              'TaggedHitType','PlayResult','RelSpeed','SpinRate','SpinAxis',
+              'Tilt','RelHeight','RelSide','Extension',
+              'VertBreak','InducedVertBreak','HorzBreak',
+              'PlateLocHeight','PlateLocSide','ExitSpeed','Angle',
+              'Direction','Bearing','Distance','LastTrackedDistance','Stadium',
+              'HomeTeam','AwayTeam','GameID','PitchUID'
+          ]
+
           if len(new_dfs) == 0:
               print("No new files to add — nothing to update")
           else:
               # Append new data
               combined = pd.concat([existing] + new_dfs, ignore_index=True)
+              # Trim to essential columns only
+              keep = [c for c in KEEP_COLS if c in combined.columns]
+              combined = combined[keep]
 
               # Normalize dates and keep only 2025+
               combined['Date'] = pd.to_datetime(combined['Date'], errors='coerce')
