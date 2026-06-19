@@ -94,6 +94,7 @@ Copy of 20250730-MackenzieStadium-1.csv
 Copy of 20250730-NorthAdams-1.csv
 Copy of 20260604-FitchHighSchool-1.csv
 Copy of 20260604-GoodallPark-1_unverified.csv
+Copy of 20260604-Keene-2.csv
 Copy of 20260604-MackenzieStadium-1.csv
 Copy of 20260604-MuzzyField-2.csv
 Copy of 20260605-CardinesField-1.csv
