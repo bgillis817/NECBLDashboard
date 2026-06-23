@@ -77,6 +77,13 @@ push_corrections <- function(new_rows) {
     existing_df <- NULL
   }
 
+  # Coerce PitchNo to character in both to avoid type mismatch
+  if (!is.null(existing_df) && "PitchNo" %in% names(existing_df)) {
+    existing_df$PitchNo <- as.character(existing_df$PitchNo)
+  }
+  if ("PitchNo" %in% names(new_rows)) {
+    new_rows$PitchNo <- as.character(new_rows$PitchNo)
+  }
   combined <- if (!is.null(existing_df)) dplyr::bind_rows(existing_df, new_rows)
               else new_rows
 
@@ -2350,7 +2357,7 @@ server <- function(input, output, session) {
   p_countTable_df <- reactive({
 
     d<-p_filt();req(d,nrow(d)>0)
-    tbl <- d%>%group_by(Count)%>%
+    tbl <- d%>%mutate(Count=paste0(Balls,"-",Strikes))%>%group_by(Count)%>%
       summarise(Pitches=n(),PA=sum(PACheck,na.rm=TRUE),AB=sum(ABCheck,na.rm=TRUE),
                 H=sum(HCheck,na.rm=TRUE),SO=sum(StrikeoutCheck,na.rm=TRUE),
                 BB=sum(WalkCheck,na.rm=TRUE),
