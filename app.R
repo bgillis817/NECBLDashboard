@@ -950,6 +950,27 @@ ui <- navbarPage(
             ),
             tagList(png_dl_btn("p_heatmap_png"), plotOutput("p_heatmap",height="480px"))
           ),
+          tabPanel("Pitch Locations",
+            br(),
+            tags$div(class="section-header","Individual Pitch Locations"),
+            tags$div(class="section-sub",
+              "Every pitch plotted as a dot \u2014 useful for reading small samples the heat map smooths over."),
+            tags$div(class="filter-bar",
+              fluidRow(
+                column(3, uiOutput("p_pl_pitch_ui")),
+                column(3, uiOutput("p_pl_count_ui")),
+                column(3,
+                  radioButtons("p_pl_hand","Batter Side",
+                               choices=c("Combined","Right","Left"),
+                               selected="Combined",inline=TRUE)),
+                column(3,
+                  radioButtons("p_pl_color","Color By",
+                               choices=c("Pitch Type"="pitch","Outcome"="outcome"),
+                               selected="pitch",inline=TRUE))
+              )
+            ),
+            tagList(png_dl_btn("p_pitchloc_png"), plotOutput("p_pitchloc",height="480px"))
+          ),
           tabPanel("Velocity & Spin",
             br(),
             tags$div(class="section-header","Velocity Over Time"),
@@ -2312,6 +2333,72 @@ server <- function(input, output, session) {
   output$p_heatmap_png <- downloadHandler(
     filename=function() "PitcherHeatMap.png",
     content=function(file) save_plot_png(file, p_heatmap_plot(), width=10, height=8)
+  )
+
+  # ── Pitch location scatter (pitcher) ──────────────────────────────────────
+  output$p_pl_pitch_ui <- renderUI({
+    req(!is.null(p_raw()))
+    selectInput("p_pl_pitch","Pitch Type",
+                choices=c("All Pitches",sort(unique(p_raw()$TaggedPitchType))))
+  })
+  output$p_pl_count_ui <- renderUI({
+    d<-p_filt();if(is.null(d)) return(NULL)
+    selectInput("p_pl_count","Count / Situation",choices=count_choices(d$CountIndiv))
+  })
+  p_pitchloc_plot <- reactive({
+    d<-p_filt();req(d,nrow(d)>0)
+    if(!is.null(input$p_pl_pitch)&&input$p_pl_pitch!="All Pitches")
+      d <- d%>%filter(TaggedPitchType==input$p_pl_pitch)
+    d <- filter_by_count(d,input$p_pl_count,"CountSit","CountIndiv")
+    if(!is.null(input$p_pl_hand)&&input$p_pl_hand!="Combined")
+      d <- d%>%filter(BatterSide==input$p_pl_hand)
+    d <- d%>%filter(!is.na(PlateLocSide),!is.na(PlateLocHeight))
+    if(nrow(d)==0)
+      return(ggplot()+annotate("text",x=0,y=0,label="No pitches",color="#8892b0",size=6)+theme_navs())
+
+    color_by <- input$p_pl_color %||% "pitch"
+    sub <- paste0("n = ",nrow(d),"   |   Count: ",input$p_pl_count%||%"All",
+                  "   |   Batter: ",input$p_pl_hand%||%"Combined")
+
+    base <- ggplot(d,aes(x=PlateLocSide,y=PlateLocHeight))+
+      annotate("rect",xmin=-1,xmax=1,ymin=1.6,ymax=3.4,fill=NA,color="#ffffff",linewidth=.7)+
+      geom_vline(xintercept=0,linewidth=.3,color="#2a2d3a",linetype="dashed")+
+      geom_hline(yintercept=2.5,linewidth=.3,color="#2a2d3a",linetype="dashed")+
+      ylim(1,4)+xlim(-1.8,1.8)+
+      labs(x="Horizontal (Pitcher's View)",y="Vertical")+
+      theme_navs()
+
+    if(color_by=="outcome"){
+      d <- d%>%mutate(Outcome=dplyr::case_when(
+        PitchCall=="StrikeSwinging"                ~ "Whiff",
+        PitchCall=="StrikeCalled"                  ~ "Called Strike",
+        PitchCall=="InPlay"                        ~ "In Play",
+        PitchCall=="FoulBall"                      ~ "Foul",
+        PitchCall %in% c("BallCalled","HitByPitch")~ "Ball",
+        TRUE                                       ~ "Other"))
+      d$Outcome <- factor(d$Outcome,
+        levels=c("Whiff","Called Strike","In Play","Foul","Ball","Other"))
+      pl_outcome_pal <- c("Whiff"="#ff4655","Called Strike"="#ffd700",
+                          "In Play"="#00d4ff","Foul"="#a78bfa",
+                          "Ball"="#64748b","Other"="#94a3b8")
+      p <- base + geom_point(data=d,aes(color=Outcome),size=2.6,alpha=.85,stroke=0)+
+        scale_color_manual(values=pl_outcome_pal,name="Outcome",drop=FALSE)
+    } else {
+      p <- base + geom_point(aes(color=TaggedPitchType),size=2.6,alpha=.85,stroke=0)+
+        scale_color_manual(values=pitch_pal,na.value="#94a3b8",name="Pitch Type")
+    }
+
+    if(is.null(input$p_pl_pitch)||input$p_pl_pitch=="All Pitches"){
+      p + facet_wrap(~TaggedPitchType,ncol=3)+
+        labs(title=paste(input$p_pitcher,"\u2014",p_season(),"Pitch Locations"),subtitle=sub)
+    } else {
+      p + labs(title=paste(input$p_pitcher,"\u2014",p_season(),input$p_pl_pitch,"Locations"),subtitle=sub)
+    }
+  })
+  output$p_pitchloc <- renderPlot({ p_pitchloc_plot() }, bg="#0f1117")
+  output$p_pitchloc_png <- downloadHandler(
+    filename=function() "PitchLocations.png",
+    content=function(file) save_plot_png(file, p_pitchloc_plot(), width=10, height=8)
   )
 
   # ── Velocity / Spin ───────────────────────────────────────────────────────
