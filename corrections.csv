@@ -1,11 +1,1 @@
-"RowID","Pitcher","Date","PitchNo","OldType","NewType","Timestamp"
-"Davis, Jack__2026-06-10__12","Davis, Jack","2026-06-10","12","TwoSeamFastBall","Sinker","2026-06-25 04:43:26"
-"Davis, Jack__2026-06-10__44","Davis, Jack","2026-06-10","44","Fastball","Sinker","2026-06-25 04:44:03"
-"Davis, Jack__2026-06-10__90","Davis, Jack","2026-06-10","90","Fastball","Sinker","2026-06-25 04:44:03"
-"Davis, Jack__2026-06-10__101","Davis, Jack","2026-06-10","101","Fastball","Sinker","2026-06-25 04:44:03"
-"Davis, Jack__2026-06-10__91","Davis, Jack","2026-06-10","91","Fastball","Sinker","2026-06-25 04:44:32"
-"Davis, Jack__2026-06-17__34","Davis, Jack","2026-06-17","34","Fastball","Sinker","2026-06-25 04:44:32"
-"Davis, Jack__2026-06-10__125","Davis, Jack","2026-06-10","125","Slider","Sinker","2026-06-25 04:44:56"
-"Davis, Jack__2026-06-17__1","Davis, Jack","2026-06-17","1","Sinker","Sinker","2026-06-25 04:44:56"
-"Davis, Jack__2026-06-10__125","Davis, Jack","2026-06-10","125","Sinker","Slider","2026-06-25 04:45:20"
-"Davis, Jack__2026-06-17__1","Davis, Jack","2026-06-17","1","Sinker","Slider","2026-06-25 04:45:20"
+RowID,Pitcher,Date,PitchNo,OldType,NewType,Timestamp
