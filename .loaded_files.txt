@@ -190,3 +190,14 @@ Copy of 20260626-FitchHighSchool-1.csv
 Copy of 20260626-FraserField-2.csv
 Copy of 20260626-MackenzieStadium-1.csv
 Copy of 20260626-MaxfieldSC-1.csv
+Copy of 20260627-FraserField-1.csv
+Copy of 20260627-MontpelierRecreation-1.csv
+Copy of 20260627-MuzzyField-1.csv
+Copy of 20260627-OldMountain-1.csv
+Copy of 20260627-RogersPark-1.csv
+Copy of 20260628-MaxfieldSC-1_unverified.csv
+Copy of 20260628-MuzzyField-1_unverified.csv
+Copy of 20260628-NorthAdams-1_unverified.csv
+Copy of 20260628-NorthAdams-2_unverified.csv
+Copy of 20260628-OldMountain-1_unverified.csv
+Copy of 20260628-SharkTank-1_unverified.csv
