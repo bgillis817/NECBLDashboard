@@ -77,13 +77,14 @@ push_corrections <- function(new_rows) {
     existing_df <- NULL
   }
 
-  # Coerce PitchNo to character in both to avoid type mismatch
-  if (!is.null(existing_df) && "PitchNo" %in% names(existing_df)) {
-    existing_df$PitchNo <- as.character(existing_df$PitchNo)
+  # Corrections.csv is a plain text log — coerce every column to character in
+  # both frames before combining. Prevents bind_rows type clashes when readr
+  # re-parses columns (e.g. Date as <date>) on read-back vs the character
+  # columns the app builds (PitchNo, Date, Timestamp, etc.).
+  if (!is.null(existing_df)) {
+    existing_df[] <- lapply(existing_df, as.character)
   }
-  if ("PitchNo" %in% names(new_rows)) {
-    new_rows$PitchNo <- as.character(new_rows$PitchNo)
-  }
+  new_rows[] <- lapply(new_rows, as.character)
   combined <- if (!is.null(existing_df)) dplyr::bind_rows(existing_df, new_rows)
               else new_rows
 
@@ -2803,6 +2804,8 @@ server <- function(input, output, session) {
     "Velocity & Spin Table"  = "velo_spin",
     "L/R Splits"             = "splits",
     "Count Splits"           = "count_splits",
+    "Usage by Count"         = "count_usage",
+    "Usage vs L/R"           = "hand_usage",
     "Batted Ball Rates"      = "batted_ball",
     "Pitch Sequencing Matrix"= "sequencing"
   )
@@ -2993,6 +2996,40 @@ server <- function(input, output, session) {
         ) %>% arrange(Count)
       plots[["count_splits"]] <- list(type="table",data=tbl,
                                        title=paste(pitcher_name,"— Count Splits"))
+    }
+
+    if ("count_usage" %in% sections) {
+      tbl <- d %>%
+        mutate(Bucket = dplyr::case_when(
+          Balls==0 & Strikes==0 ~ "First Pitch",
+          Strikes==2            ~ "Two Strikes",
+          Balls > Strikes       ~ "Hitter's Count",
+          Strikes > Balls       ~ "Pitcher's Count",
+          TRUE                  ~ "Even Count")) %>%
+        group_by(Bucket) %>% mutate(N=n()) %>%
+        group_by(Bucket, N, Pitch=TaggedPitchType) %>%
+        summarise(np=n(), .groups="drop") %>%
+        mutate(Usage=paste0(round(np/N*100,0),"%")) %>%
+        dplyr::select(Bucket, N, Pitch, Usage) %>%
+        tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
+        rename(Count=Bucket, Pitches=N)
+      lvl <- c("First Pitch","Hitter's Count","Pitcher's Count","Even Count","Two Strikes")
+      tbl <- tbl %>% arrange(match(Count, lvl))
+      plots[["count_usage"]] <- list(type="table",data=tbl,
+                                     title=paste(pitcher_name,"— Pitch Usage by Count"))
+    }
+
+    if ("hand_usage" %in% sections) {
+      tbl <- d %>%
+        group_by(Side=BatterSide) %>% mutate(N=n()) %>%
+        group_by(Side, N, Pitch=TaggedPitchType) %>%
+        summarise(np=n(), .groups="drop") %>%
+        mutate(Usage=paste0(round(np/N*100,0),"%")) %>%
+        dplyr::select(Side, N, Pitch, Usage) %>%
+        tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
+        rename(`Batter Side`=Side, Pitches=N)
+      plots[["hand_usage"]] <- list(type="table",data=tbl,
+                                    title=paste(pitcher_name,"— Pitch Usage vs L/R"))
     }
 
     if ("batted_ball" %in% sections) {
