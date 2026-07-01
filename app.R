@@ -2804,7 +2804,7 @@ server <- function(input, output, session) {
     "Velocity & Spin Table"  = "velo_spin",
     "L/R Splits"             = "splits",
     "Count Splits"           = "count_splits",
-    "Usage by Count"         = "count_usage",
+    "Usage by Count (L/R)"   = "count_usage",
     "Usage vs L/R"           = "hand_usage",
     "Batted Ball Rates"      = "batted_ball",
     "Pitch Sequencing Matrix"= "sequencing"
@@ -2999,6 +2999,7 @@ server <- function(input, output, session) {
     }
 
     if ("count_usage" %in% sections) {
+      lvl <- c("First Pitch","Hitter's Count","Pitcher's Count","Even Count","Two Strikes")
       tbl <- d %>%
         mutate(Bucket = dplyr::case_when(
           Balls==0 & Strikes==0 ~ "First Pitch",
@@ -3006,17 +3007,16 @@ server <- function(input, output, session) {
           Balls > Strikes       ~ "Hitter's Count",
           Strikes > Balls       ~ "Pitcher's Count",
           TRUE                  ~ "Even Count")) %>%
-        group_by(Bucket) %>% mutate(N=n()) %>%
-        group_by(Bucket, N, Pitch=TaggedPitchType) %>%
+        group_by(Bucket, Batter=BatterSide) %>% mutate(N=n()) %>%
+        group_by(Bucket, Batter, N, Pitch=TaggedPitchType) %>%
         summarise(np=n(), .groups="drop") %>%
         mutate(Usage=paste0(round(np/N*100,0),"%")) %>%
-        dplyr::select(Bucket, N, Pitch, Usage) %>%
+        dplyr::select(Bucket, Batter, N, Pitch, Usage) %>%
         tidyr::pivot_wider(names_from=Pitch, values_from=Usage, values_fill="0%") %>%
-        rename(Count=Bucket, Pitches=N)
-      lvl <- c("First Pitch","Hitter's Count","Pitcher's Count","Even Count","Two Strikes")
-      tbl <- tbl %>% arrange(match(Count, lvl))
+        rename(Count=Bucket, Pitches=N) %>%
+        arrange(match(Count, lvl), Batter)
       plots[["count_usage"]] <- list(type="table",data=tbl,
-                                     title=paste(pitcher_name,"— Pitch Usage by Count"))
+                                     title=paste(pitcher_name,"— Pitch Usage by Count (vs L/R)"))
     }
 
     if ("hand_usage" %in% sections) {
