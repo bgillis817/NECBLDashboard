@@ -3402,60 +3402,40 @@ server <- function(input, output, session) {
         gg_items <- Filter(Negate(is.null), gg_items)
         if (length(gg_items) == 0) next
 
-        # Header page — player name + team banner
-        grid::grid.newpage()
-        grid::grid.rect(gp=grid::gpar(fill="#111111", col=NA))
-        grid::grid.text(player, x=0.5, y=0.60,
-                        gp=grid::gpar(fontsize=32, fontface="bold", col="white"))
-        grid::grid.text(
-          paste0(input$sr_team, "  |  ", sr_season(), "  |  NECBL Scouting Report"),
-          x=0.5, y=0.44, gp=grid::gpar(fontsize=14, col="#aaaaaa"))
-        grid::grid.text(
-          paste0("Generated ", format(Sys.Date(),"%B %d, %Y")),
-          x=0.5, y=0.34, gp=grid::gpar(fontsize=10, col="#888888"))
-
-        # Layout items in 3x3 grid per page
-        items_per_page <- 9
         n_items <- length(gg_items)
-        n_pages <- ceiling(n_items / items_per_page)
 
-        for (pg in seq_len(n_pages)) {
-          idx_start <- (pg-1)*items_per_page + 1
-          idx_end   <- min(pg*items_per_page, n_items)
-          page_items <- gg_items[idx_start:idx_end]
+        # One page per pitcher — grid sized so everything selected fits.
+        ncol <- max(1, ceiling(sqrt(n_items)))
+        nrow <- max(1, ceiling(n_items / ncol))
 
-          # Pad to 9 with blank plots
-          while (length(page_items) < items_per_page) {
-            page_items <- c(page_items, list(ggplot()+theme_void()+
-              theme(plot.background=element_rect(fill="white",color=NA))))
-          }
+        grid::grid.newpage()
 
-          grid::grid.newpage()
-          # Page header strip
-          grid::pushViewport(grid::viewport(x=0.5,y=0.985,width=1,height=0.03,just="top"))
-          grid::grid.rect(gp=grid::gpar(fill="#111111",col=NA))
-          grid::grid.text(
-            paste0(player,"  |  ",input$sr_team,"  |  ",sr_season(),
-                   "  —  Page ",pg," of ",n_pages),
-            x=0.5,y=0.5,gp=grid::gpar(fontsize=8,col="white",fontface="bold"))
-          grid::popViewport()
+        # Compact header strip across the top of the same page
+        grid::pushViewport(grid::viewport(x=0.5, y=0.965, width=1, height=0.07, just="center"))
+        grid::grid.rect(gp=grid::gpar(fill="#111111", col=NA))
+        grid::grid.text(
+          paste0(player,"    |    ",input$sr_team,"    |    ",sr_season(),
+                 " NECBL Scouting Report    |    ",format(Sys.Date(),"%b %d, %Y")),
+          x=0.5, y=0.5, gp=grid::gpar(fontsize=13, col="white", fontface="bold"))
+        grid::popViewport()
 
-          # 3x3 content grid
-          content_vp <- grid::viewport(x=0.5,y=0.485,width=0.99,height=0.97)
-          grid::pushViewport(content_vp)
-          for (row in 1:3) {
-            for (col in 1:3) {
-              idx <- (row-1)*3 + col
-              x_pos <- (col-0.5)/3
-              y_pos <- 1 - (row-0.5)/3
-              vp <- grid::viewport(x=x_pos, y=y_pos,
-                                   width=1/3, height=1/3,
-                                   just="center")
-              print(page_items[[idx]], vp=vp)
-            }
-          }
-          grid::popViewport()
+        # Content grid fills the area below the header (with a bottom margin)
+        content_vp <- grid::viewport(x=0.5, y=0.46, width=0.98, height=0.90)
+        grid::pushViewport(content_vp)
+        gap    <- 0.008
+        cell_w <- 1/ncol
+        cell_h <- 1/nrow
+        for (i in seq_len(n_items)) {
+          r <- ceiling(i / ncol)
+          c <- i - (r-1)*ncol
+          x_pos <- (c - 0.5) * cell_w
+          y_pos <- 1 - (r - 0.5) * cell_h
+          vp <- grid::viewport(x=x_pos, y=y_pos,
+                               width=cell_w - gap, height=cell_h - gap,
+                               just="center")
+          print(gg_items[[i]], vp=vp)
         }
+        grid::popViewport()
       }
 
       dev.off()
