@@ -2035,10 +2035,15 @@ server <- function(input, output, session) {
       summarise(Pitches=n(),PA=sum(PACheck,na.rm=TRUE),AB=sum(ABCheck,na.rm=TRUE),
                 H=sum(HCheck,na.rm=TRUE),SO=sum(StrikeoutCheck,na.rm=TRUE),
                 BB=sum(WalkCheck,na.rm=TRUE),
+                `2B`=sum(PlayResult=="Double"),`3B`=sum(PlayResult=="Triple"),
+                HR=sum(PlayResult=="HomeRun"),
                 `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
                 .groups="drop")%>%
-      mutate(AVG=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
-             OBP=sprintf("%.3f",ifelse(PA>0,(H+BB)/PA,NA)))
+      mutate(TB=(H-`2B`-`3B`-HR)+2*`2B`+3*`3B`+4*HR,
+             AVG=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
+             OBP=sprintf("%.3f",ifelse(PA>0,(H+BB)/PA,NA)),
+             SLG=sprintf("%.3f",ifelse(AB>0,TB/AB,NA)))%>%
+      dplyr::select(Side,Pitches,PA,AB,SO,BB,H,HR,`CSW%`,AVG,OBP,SLG)
     tbl
   })
   output$p_splits <- renderDataTable({ datatable(p_splits_df(), options=dt_opts, rownames=FALSE) })
@@ -2666,13 +2671,19 @@ server <- function(input, output, session) {
       tbl <- d %>% group_by(`Batter Side`=BatterSide) %>%
         summarise(
           Pitches=n(), BF=sum(PACheck,na.rm=TRUE),
+          AB=sum(ABCheck,na.rm=TRUE), H=sum(HCheck,na.rm=TRUE),
+          TB=sum(PlayResult=="Single")+2*sum(PlayResult=="Double")+
+             3*sum(PlayResult=="Triple")+4*sum(PlayResult=="HomeRun"),
           `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
           `Zone%`=paste0(round(mean(ZoneCheck,na.rm=TRUE)*100,1),"%"),
           `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
           `K%`=paste0(round(sum(StrikeoutCheck,na.rm=TRUE)/max(BF,1)*100,1),"%"),
           `BB%`=paste0(round(sum(WalkCheck,na.rm=TRUE)/max(BF,1)*100,1),"%"),
           .groups="drop"
-        )
+        ) %>%
+        mutate(AVG=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
+               SLG=sprintf("%.3f",ifelse(AB>0,TB/AB,NA))) %>%
+        dplyr::select(`Batter Side`,Pitches,BF,`CSW%`,`Zone%`,`Whiff%`,`K%`,`BB%`,AVG,SLG)
     }
     tbl
   })
@@ -2704,11 +2715,18 @@ server <- function(input, output, session) {
           N=n(),
           Usage=paste0(round(n()/nrow(d)*100,1),"%"),
           `Avg Velo`=round(mean(RelSpeed,na.rm=TRUE),1),
+          AB=sum(ABCheck,na.rm=TRUE), H=sum(HCheck,na.rm=TRUE),
+          TB=sum(PlayResult=="Single")+2*sum(PlayResult=="Double")+
+             3*sum(PlayResult=="Triple")+4*sum(PlayResult=="HomeRun"),
           `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
           `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
           `Zone%`=paste0(round(mean(ZoneCheck,na.rm=TRUE)*100,1),"%"),
           .groups="drop"
-        ) %>% arrange(desc(N))
+        ) %>%
+        mutate(AVG=sprintf("%.3f",ifelse(AB>0,H/AB,NA)),
+               SLG=sprintf("%.3f",ifelse(AB>0,TB/AB,NA))) %>%
+        dplyr::select(`Pitch Type`,N,Usage,`Avg Velo`,`CSW%`,`Whiff%`,`Zone%`,AVG,SLG) %>%
+        arrange(desc(N))
     }
     tbl
   })
@@ -2979,6 +2997,10 @@ server <- function(input, output, session) {
           `Whiff%`={sw=sum(SwingCheck,na.rm=TRUE);paste0(if(sw>0)round(sum(WhiffCheck,na.rm=TRUE)/sw*100,1)else 0,"%")},
           `AVG`=sprintf("%.3f",ifelse(sum(ABCheck,na.rm=TRUE)>0,
                                        sum(HCheck,na.rm=TRUE)/sum(ABCheck,na.rm=TRUE),NA)),
+          `SLG`=sprintf("%.3f",ifelse(sum(ABCheck,na.rm=TRUE)>0,
+                                       (sum(PlayResult=="Single")+2*sum(PlayResult=="Double")+
+                                        3*sum(PlayResult=="Triple")+4*sum(PlayResult=="HomeRun"))/
+                                       sum(ABCheck,na.rm=TRUE),NA)),
           .groups="drop"
         )
       plots[["splits"]] <- list(type="table",data=tbl,
