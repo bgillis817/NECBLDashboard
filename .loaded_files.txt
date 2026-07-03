@@ -209,3 +209,10 @@ Copy of 20260629-Keene-2.csv
 Copy of 20260629-MackenzieStadium-1.csv
 Copy of 20260629-MontpelierRecreation-1.csv
 Copy of 20260629-SharkTank-1.csv
+Copy of 20260630-MaxfieldSC-1.csv
+Copy of 20260630-MontpelierRecreation-1.csv
+Copy of 20260630-RogersPark-1.csv
+Copy of 20260701-FitchHighSchool-1.csv
+Copy of 20260701-Keene-1.csv
+Copy of 20260701-MackenzieStadium-1.csv
+Copy of 20260701-SharkTank-1.csv
