@@ -358,9 +358,13 @@ load_and_cache <- function() {
   message("Loading data from GitHub...")
   raw <- load_all_pitches()
   if (!is.null(raw) && nrow(raw) > 0) {
-    # Stable content-based key so corrections survive nightly re-loads
+    # Semantic key (Pitcher__Date__PitchNo) used for persistent corrections.
     raw <- raw %>%
       mutate(RowID = paste(Pitcher, Date, PitchNo, sep="__"))
+    # Guaranteed-unique per-row id for in-session selection -> apply. Unlike
+    # RowID this is 1:1 with a physical row, so a plot selection can never
+    # fan out to a different pitch that happens to share Pitcher/Date/PitchNo.
+    raw$UID <- as.character(seq_len(nrow(raw)))
   }
   .raw_cache$raw_all            <- raw
   .raw_cache$hitters_processed  <- process_hitters(raw)
@@ -1793,7 +1797,7 @@ server <- function(input, output, session) {
       x = ~HorzBreak, y = ~InducedVertBreak,
       color = ~TaggedPitchType, colors = pal,
       type = "scatter", mode = "markers",
-      key = ~RowID,
+      key = ~UID,
       marker = list(size=9, opacity=0.75),
       text = ~paste0(TaggedPitchType,
                      "<br>Velo: ", round(RelSpeed,1), " mph",
@@ -1886,9 +1890,10 @@ server <- function(input, output, session) {
       return()
     }
 
-    # Update raw_all cache
+    # Update raw_all cache — match on UID (exact 1:1 with a physical row) so a
+    # selection can never flip a different pitch sharing Pitcher/Date/PitchNo.
     raw <- .raw_cache$raw_all
-    idx <- which(raw$RowID %in% ids)
+    idx <- which(as.character(raw$UID) %in% ids)
     if (length(idx)==0) {
       showNotification("No matching rows found in cache.", type="warning")
       return()
