@@ -310,6 +310,12 @@ process_pitchers <- function(df) {
         PACheck        = StrikeoutCheck + WalkCheck + HBPCheck + BIPCheck,
         ABCheck        = StrikeoutCheck + BIPCheck - SacCheck
       ) %>%
+      # Drop completely shapeless Undefined pitches — no pitch type AND no
+      # movement data, so they can't be plotted/tagged and only inflate usage
+      # denominators. Undefined pitches that DO have movement are kept so they
+      # remain visible/taggable in the movement plot.
+      filter(!((is.na(TaggedPitchType) | TaggedPitchType %in% c("Undefined","")) &
+               is.na(HorzBreak) & is.na(InducedVertBreak))) %>%
       arrange(Pitcher, Date, PitchNo) %>%
       group_by(Pitcher, Season) %>%
       mutate(OverallPitchCount = row_number()) %>%
@@ -645,11 +651,12 @@ ui <- navbarPage(
     tags$script(HTML("
       Shiny.addCustomMessageHandler('setSeasonBtns', function(m) {
         var pfx = m.prefix; var s = m.season;
-        document.getElementById(pfx+'_2023').classList.remove('active');
-        document.getElementById(pfx+'_2024').classList.remove('active');
-        document.getElementById(pfx+'_2025').classList.remove('active');
-        document.getElementById(pfx+'_2026').classList.remove('active');
-        document.getElementById(pfx+'_'+s).classList.add('active');
+        ['2023','2024','2025','2026'].forEach(function(yr){
+          var el = document.getElementById(pfx+'_'+yr);
+          if (el) el.classList.remove('active');
+        });
+        var sel = document.getElementById(pfx+'_'+s);
+        if (sel) sel.classList.add('active');
       });
     "))
   ),
@@ -669,11 +676,7 @@ ui <- navbarPage(
           tags$button("2026",id="h_2026",class="season-btn active",
             onclick="Shiny.setInputValue('h_season','2026',{priority:'event'})"),
           tags$button("2025",id="h_2025",class="season-btn",
-            onclick="Shiny.setInputValue('h_season','2025',{priority:'event'})"),
-          tags$button("2024",id="h_2024",class="season-btn",
-            onclick="Shiny.setInputValue('h_season','2024',{priority:'event'})"),
-          tags$button("2023",id="h_2023",class="season-btn",
-            onclick="Shiny.setInputValue('h_season','2023',{priority:'event'})")
+            onclick="Shiny.setInputValue('h_season','2025',{priority:'event'})")
         ),
         tags$hr(),
         uiOutput("h_teamSelect"),
@@ -811,11 +814,7 @@ ui <- navbarPage(
           tags$button("2026",id="p_2026",class="season-btn active",
             onclick="Shiny.setInputValue('p_season','2026',{priority:'event'})"),
           tags$button("2025",id="p_2025",class="season-btn",
-            onclick="Shiny.setInputValue('p_season','2025',{priority:'event'})"),
-          tags$button("2024",id="p_2024",class="season-btn",
-            onclick="Shiny.setInputValue('p_season','2024',{priority:'event'})"),
-          tags$button("2023",id="p_2023",class="season-btn",
-            onclick="Shiny.setInputValue('p_season','2023',{priority:'event'})")
+            onclick="Shiny.setInputValue('p_season','2025',{priority:'event'})")
         ),
         tags$hr(),
         uiOutput("p_teamSelect"),
@@ -1039,11 +1038,7 @@ ui <- navbarPage(
             tags$button("2026",id="lb_2026",class="season-btn active",
               onclick="Shiny.setInputValue('lb_season','2026',{priority:'event'})"),
             tags$button("2025",id="lb_2025",class="season-btn",
-              onclick="Shiny.setInputValue('lb_season','2025',{priority:'event'})"),
-            tags$button("2024",id="lb_2024",class="season-btn",
-              onclick="Shiny.setInputValue('lb_season','2024',{priority:'event'})"),
-            tags$button("2023",id="lb_2023",class="season-btn",
-              onclick="Shiny.setInputValue('lb_season','2023',{priority:'event'})")
+              onclick="Shiny.setInputValue('lb_season','2025',{priority:'event'})")
           )
         ),
         column(3,
@@ -1094,11 +1089,7 @@ ui <- navbarPage(
           tags$button("2026",id="sr_2026",class="season-btn active",
             onclick="Shiny.setInputValue('sr_season','2026',{priority:'event'})"),
           tags$button("2025",id="sr_2025",class="season-btn",
-            onclick="Shiny.setInputValue('sr_season','2025',{priority:'event'})"),
-          tags$button("2024",id="sr_2024",class="season-btn",
-            onclick="Shiny.setInputValue('sr_season','2024',{priority:'event'})"),
-          tags$button("2023",id="sr_2023",class="season-btn",
-            onclick="Shiny.setInputValue('sr_season','2023',{priority:'event'})")
+            onclick="Shiny.setInputValue('sr_season','2025',{priority:'event'})")
         ),
         br(),
 
