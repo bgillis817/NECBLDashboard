@@ -183,6 +183,7 @@ Copy of 20260624-MuzzyField-1.csv
 Copy of 20260624-NorthAdams-1.csv
 Copy of 20260625-FitchHighSchool-1.csv
 Copy of 20260625-Keene-1.csv
+Copy of 20260625-Keene-1_unverified.csv
 Copy of 20260625-Keene-2.csv
 Copy of 20260625-OldMountain-1.csv
 Copy of 20260625-RogersPark-1.csv
@@ -216,3 +217,18 @@ Copy of 20260701-FitchHighSchool-1.csv
 Copy of 20260701-Keene-1.csv
 Copy of 20260701-MackenzieStadium-1.csv
 Copy of 20260701-SharkTank-1.csv
+Copy of 20260702-FitchHighSchool-1.csv
+Copy of 20260702-FraserField-1.csv
+Copy of 20260702-OldMountain-1.csv
+Copy of 20260702-RogersPark-1.csv
+Copy of 20260702-SharkTank-1.csv
+Copy of 20260703-Keene-1.csv
+Copy of 20260703-MackenzieStadium-1.csv
+Copy of 20260703-MaxfieldSC-1.csv
+Copy of 20260703-MuzzyField-1.csv
+Copy of 20260704-FitchHighSchool-1.csv
+Copy of 20260704-GoodallPark-1.csv
+Copy of 20260704-MontpelierRecreation-1.csv
+Copy of 20260704-NorthAdams-1.csv
+Copy of 20260705-FraserField-1.csv
+Copy of 20260705-MuzzyField-1.csv
