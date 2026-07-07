@@ -977,11 +977,36 @@ ui <- navbarPage(
           ),
           tabPanel("Velocity & Spin",
             br(),
+            tags$div(class="filter-bar",
+              radioButtons("p_vs_order","Order",
+                           choices=c("Over Time"="time","High \u2192 Low"="desc"),
+                           selected="time", inline=TRUE)
+            ),
             tags$div(class="section-header","Velocity Over Time"),
-            tagList(png_dl_btn("p_velo_png"), plotOutput("p_velo",height="360px")),
+            tagList(png_dl_btn("p_velo_png"), plotly::plotlyOutput("p_velo",height="360px")),
             br(),
             tags$div(class="section-header","Spin Rate Over Time"),
-            tagList(png_dl_btn("p_spin_png"), plotOutput("p_spin",height="360px"))
+            tagList(png_dl_btn("p_spin_png"), plotly::plotlyOutput("p_spin",height="360px")),
+            conditionalPanel("output.p_is_admin == true",
+              br(),
+              tags$div(class="section-sub",
+                "Admin mode: lasso/box-select or click points on either chart above (click toggles a point), pick a pitch type, then Apply. Selections are shared with the Movement tab."),
+              tags$div(class="filter-bar",
+                fluidRow(
+                  column(3, uiOutput("p_vs_reclass_count")),
+                  column(4,
+                    selectizeInput("p_vs_reclass_newtype","New Pitch Type",
+                                   choices=NULL, options=list(create=TRUE))),
+                  column(2,
+                    actionButton("p_vs_reclass_apply","Apply",class="btn-primary",
+                                 style="margin-top:24px;")),
+                  column(3,
+                    actionButton("p_vs_reclass_push","Push Corrections to GitHub",
+                                 class="btn-default",style="margin-top:24px;"))
+                )
+              ),
+              uiOutput("p_vs_reclass_status")
+            )
           ),
           tabPanel("Count Splits",
             br(),
@@ -1863,33 +1888,19 @@ server <- function(input, output, session) {
       tags$p("Undefined (plottable)"))
   })
 
-  observeEvent(p_admin_data(), {
-    d <- p_admin_data()
-    if (!is.null(d) && nrow(d)>0) {
-      types <- sort(unique(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType)))
-      updateSelectizeInput(session,"p_reclass_newtype",
-                           choices=types, selected=types[1], server=FALSE)
-    }
-  })
-
-  observeEvent(input$p_reclass_apply, {
-    req(is_admin())
+  # Shared: apply a reclassification to the currently-selected pitches
+  do_reclass <- function(new_type) {
     ids <- reclass_selected_ids()
-    new_type <- input$p_reclass_newtype
     if (length(ids)==0 || is.null(new_type) || nchar(new_type)==0) {
-      showNotification("Select pitches and a pitch type first.", type="warning")
-      return()
+      showNotification("Select pitches and a pitch type first.", type="warning"); return(invisible())
     }
-
-    # Update raw_all cache — match on UID (exact 1:1 with a physical row) so a
-    # selection can never flip a different pitch sharing Pitcher/Date/PitchNo.
+    # Match on UID (exact 1:1 with a physical row) so a selection can never
+    # flip a different pitch sharing Pitcher/Date/PitchNo.
     raw <- .raw_cache$raw_all
     idx <- which(as.character(raw$UID) %in% ids)
     if (length(idx)==0) {
-      showNotification("No matching rows found in cache.", type="warning")
-      return()
+      showNotification("No matching rows found in cache.", type="warning"); return(invisible())
     }
-
     log_rows <- data.frame(
       RowID     = raw$RowID[idx],
       Pitcher   = raw$Pitcher[idx],
@@ -1900,10 +1911,8 @@ server <- function(input, output, session) {
       Timestamp = format(Sys.time()),
       stringsAsFactors = FALSE
     )
-
     raw$TaggedPitchType[idx] <- new_type
     .raw_cache$raw_all <- raw
-
     # Reprocess so all downstream reactives reflect the change
     .raw_cache$hitters_processed <- process_hitters(raw)
     pit <- process_pitchers(raw)
@@ -1911,36 +1920,41 @@ server <- function(input, output, session) {
     .raw_cache$p_data_all  <- if (!is.null(pit)) pit$data      else NULL
     .raw_cache$p_seqs_all  <- if (!is.null(pit)) pit$sequences else NULL
     .raw_cache$p_pairs_all <- if (!is.null(pit)) pit$pairs     else NULL
-
-    # Accumulate session log
     existing_log <- reclass_pending_log()
     reclass_pending_log(if (is.null(existing_log)) log_rows else dplyr::bind_rows(existing_log, log_rows))
-
     reclass_selected_ids(character(0))
     refresh_trigger(refresh_trigger() + 1)
-
     showNotification(paste0("Reclassified ", length(idx), " pitch(es) to ", new_type, "."),
                      type="message", duration=4)
-  })
+  }
 
-  observeEvent(input$p_reclass_push, {
-    req(is_admin())
+  # Shared: push accumulated corrections to GitHub
+  do_push <- function() {
     log <- reclass_pending_log()
     if (is.null(log) || nrow(log)==0) {
-      showNotification("No pending corrections to push.", type="warning")
-      return()
+      showNotification("No pending corrections to push.", type="warning"); return(invisible())
     }
-    showNotification("Pushing corrections to GitHub...", type="message",
-                     duration=NULL, id="pushing")
+    showNotification("Pushing corrections to GitHub...", type="message", duration=NULL, id="pushing")
     res <- push_corrections(log)
     removeNotification("pushing")
-    if (res$ok) {
-      showNotification(res$msg, type="message", duration=5)
-      reclass_pending_log(NULL)
-    } else {
-      showNotification(res$msg, type="error", duration=8)
+    if (res$ok) { showNotification(res$msg, type="message", duration=5); reclass_pending_log(NULL) }
+    else        { showNotification(res$msg, type="error", duration=8) }
+  }
+
+  # Keep both reclassify pickers (Movement tab + Velocity/Spin tab) populated
+  observeEvent(p_admin_data(), {
+    d <- p_admin_data()
+    if (!is.null(d) && nrow(d)>0) {
+      types <- sort(unique(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType)))
+      updateSelectizeInput(session,"p_reclass_newtype",    choices=types, selected=types[1], server=FALSE)
+      updateSelectizeInput(session,"p_vs_reclass_newtype", choices=types, selected=types[1], server=FALSE)
     }
   })
+
+  observeEvent(input$p_reclass_apply,    { req(is_admin()); do_reclass(input$p_reclass_newtype) })
+  observeEvent(input$p_vs_reclass_apply, { req(is_admin()); do_reclass(input$p_vs_reclass_newtype) })
+  observeEvent(input$p_reclass_push,     { req(is_admin()); do_push() })
+  observeEvent(input$p_vs_reclass_push,  { req(is_admin()); do_push() })
 
   output$p_reclass_status <- renderUI({
     log <- reclass_pending_log()
@@ -2404,10 +2418,17 @@ server <- function(input, output, session) {
   )
 
   # ── Velocity / Spin ───────────────────────────────────────────────────────
-  trend_plot <- function(d,y_col,y_lab,title_str){
+  trend_plot <- function(d,y_col,y_lab,title_str,order_by="time"){
     if(is.null(d)||nrow(d)==0) return(NULL)
-    pd <- d%>%arrange(Date,PitchNo)%>%group_by(TaggedPitchType)%>%
-      mutate(idx=row_number()-1)%>%ungroup()
+    if(identical(order_by,"desc")){
+      pd <- d%>%arrange(TaggedPitchType, dplyr::desc(.data[[y_col]]))%>%
+        group_by(TaggedPitchType)%>%mutate(idx=row_number()-1)%>%ungroup()
+      xlab <- "Rank (High \u2192 Low)"
+    } else {
+      pd <- d%>%arrange(Date,PitchNo)%>%group_by(TaggedPitchType)%>%
+        mutate(idx=row_number()-1)%>%ungroup()
+      xlab <- "Pitch Count"
+    }
     smry <- pd%>%group_by(TaggedPitchType)%>%
       summarise(avg=mean(.data[[y_col]],na.rm=TRUE),mn=min(.data[[y_col]],na.rm=TRUE),
                 mx=max(.data[[y_col]],na.rm=TRUE),max_idx=max(idx),
@@ -2420,27 +2441,104 @@ server <- function(input, output, session) {
                 hjust=-0.1,vjust=.5,size=2.8,lineheight=.85)+
       scale_color_manual(values=pitch_pal,na.value="#94a3b8")+
       scale_x_continuous(expand=expansion(mult=c(.02,.18)))+
-      labs(title=title_str,x="Pitch Count",y=y_lab,color="Pitch Type")+
+      labs(title=title_str,x=xlab,y=y_lab,color="Pitch Type")+
       theme_navs()
   }
   p_velo_plot <- reactive({
     trend_plot(p_filt(),"RelSpeed","Velocity (MPH)",
-               paste(input$p_pitcher,"—",p_season(),"Velocity"))
+               paste(input$p_pitcher,"—",p_season(),"Velocity"),
+               order_by=input$p_vs_order %||% "time")
   })
-  output$p_velo <- renderPlot({ p_velo_plot() }, bg="#0f1117")
+  p_spin_plot <- reactive({
+    trend_plot(p_filt(),"SpinRate","Spin Rate (RPM)",
+               paste(input$p_pitcher,"—",p_season(),"Spin Rate"),
+               order_by=input$p_vs_order %||% "time")
+  })
+
+  # Interactive plotly trend (markers keyed by UID) — supports lasso/box-select
+  # and click-to-toggle so pitches can be reclassified from this tab too.
+  trend_plotly <- function(d, y_col, y_lab, title_str, order_by="time") {
+    if (is.null(d) || nrow(d)==0) return(plotly::plotly_empty(type="scatter", mode="markers"))
+    d$Yval <- d[[y_col]]
+    if (identical(order_by,"desc")) {
+      d <- d %>% arrange(TaggedPitchType, dplyr::desc(Yval)) %>%
+        group_by(TaggedPitchType) %>% mutate(idx=row_number()-1) %>% ungroup()
+      xlab <- "Rank (High \u2192 Low)"
+    } else {
+      d <- d %>% arrange(Date, PitchNo) %>%
+        group_by(TaggedPitchType) %>% mutate(idx=row_number()-1) %>% ungroup()
+      xlab <- "Pitch Count"
+    }
+    types <- sort(unique(d$TaggedPitchType))
+    pal <- pitch_pal[as.character(types)]; pal[is.na(pal)] <- "#94a3b8"; names(pal) <- types
+    plotly::plot_ly(
+      data=d, x=~idx, y=~Yval,
+      color=~TaggedPitchType, colors=pal,
+      type="scatter", mode="lines+markers",
+      key=~UID,
+      marker=list(size=7, opacity=0.8), line=list(width=1),
+      text=~paste0(TaggedPitchType,
+                   "<br>", y_lab, ": ", round(Yval,1),
+                   "<br>Date: ", Date,
+                   "<br>Count: ", Balls, "-", Strikes),
+      hoverinfo="text", source="p_vs_select"
+    ) %>% plotly::layout(
+      title=list(text=title_str, font=list(color="#ffffff")),
+      xaxis=list(title=xlab, gridcolor="#2a2d3a", color="#b0b8d4", zerolinecolor="#2a2d3a"),
+      yaxis=list(title=y_lab, gridcolor="#2a2d3a", color="#b0b8d4", zerolinecolor="#2a2d3a"),
+      paper_bgcolor="#0f1117", plot_bgcolor="#141720",
+      legend=list(font=list(color="#b0b8d4")), dragmode="lasso"
+    ) %>% plotly::config(displaylogo=FALSE,
+                         modeBarButtonsToAdd=c("lasso2d","select2d")) %>%
+      plotly::event_register("plotly_selected") %>%
+      plotly::event_register("plotly_click")
+  }
+
+  output$p_velo <- plotly::renderPlotly({
+    d <- p_filt(); req(d, nrow(d)>0)
+    trend_plotly(d, "RelSpeed", "Velocity (MPH)",
+                 paste(input$p_pitcher,"—",p_season(),"Velocity"),
+                 order_by=input$p_vs_order %||% "time")
+  })
   output$p_velo_png <- downloadHandler(
     filename=function() "Velocity.png",
     content=function(file) save_plot_png(file, p_velo_plot(), width=10, height=6)
   )
-  p_spin_plot <- reactive({
-    trend_plot(p_filt(),"SpinRate","Spin Rate (RPM)",
-               paste(input$p_pitcher,"—",p_season(),"Spin Rate"))
+  output$p_spin <- plotly::renderPlotly({
+    d <- p_filt(); req(d, nrow(d)>0)
+    trend_plotly(d, "SpinRate", "Spin Rate (RPM)",
+                 paste(input$p_pitcher,"—",p_season(),"Spin Rate"),
+                 order_by=input$p_vs_order %||% "time")
   })
-  output$p_spin <- renderPlot({ p_spin_plot() }, bg="#0f1117")
   output$p_spin_png <- downloadHandler(
     filename=function() "SpinRate.png",
     content=function(file) save_plot_png(file, p_spin_plot(), width=10, height=6)
   )
+
+  # Selection on either trend plot feeds the shared reclassify state
+  observeEvent(plotly::event_data("plotly_selected", source="p_vs_select"), {
+    sel <- plotly::event_data("plotly_selected", source="p_vs_select")
+    if (!is.null(sel) && "key" %in% names(sel))
+      reclass_selected_ids(unique(as.character(sel$key)))
+  })
+  observeEvent(plotly::event_data("plotly_click", source="p_vs_select"), {
+    cl <- plotly::event_data("plotly_click", source="p_vs_select")
+    if (!is.null(cl) && "key" %in% names(cl)) {
+      k <- as.character(cl$key); cur <- reclass_selected_ids()
+      reclass_selected_ids(if (k %in% cur) setdiff(cur, k) else unique(c(cur, k)))
+    }
+  })
+  output$p_vs_reclass_count <- renderUI({
+    tags$div(class="stat-card",
+      tags$h2(length(reclass_selected_ids())),
+      tags$p("Pitches Selected"))
+  })
+  output$p_vs_reclass_status <- renderUI({
+    log <- reclass_pending_log()
+    n <- if (is.null(log)) 0 else nrow(log)
+    tags$p(style="color:#8892b0;font-size:12px;margin-top:8px;",
+           paste0(n," correction(s) applied this session and pending push to GitHub."))
+  })
 
   # ── Count splits ──────────────────────────────────────────────────────────
   p_countTable_df <- reactive({
