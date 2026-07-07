@@ -822,6 +822,9 @@ ui <- navbarPage(
         uiOutput("p_dateUI"),
         uiOutput("p_pitchTypeUI"),
         selectInput("p_batterSide","Batter Side",choices=c("All","Right","Left")),
+        numericInput("p_min_type_n",
+                     "Hide pitch types under N pitches (tables)",
+                     value=0, min=0, max=200, step=1),
         tags$hr(),
         uiOutput("p_pitcherInfo"),
         tags$hr(),
@@ -978,9 +981,16 @@ ui <- navbarPage(
           tabPanel("Velocity & Spin",
             br(),
             tags$div(class="filter-bar",
-              radioButtons("p_vs_order","Order",
-                           choices=c("Over Time"="time","High \u2192 Low"="desc"),
-                           selected="time", inline=TRUE)
+              fluidRow(
+                column(6,
+                  radioButtons("p_vs_order","Order",
+                               choices=c("Over Time"="time","High \u2192 Low"="desc"),
+                               selected="time", inline=TRUE)),
+                column(6,
+                  checkboxInput("p_vs_hide_noshape",
+                                "Hide pitches with no shape (missing IVB/HB)",
+                                value=FALSE))
+              )
             ),
             tags$div(class="section-header","Velocity Over Time"),
             tagList(png_dl_btn("p_velo_png"), plotly::plotlyOutput("p_velo",height="360px")),
@@ -1741,6 +1751,22 @@ server <- function(input, output, session) {
     d
   })
 
+  # Pitch types meeting the "min pitches" threshold — used to hide stray/
+  # mis-tagged low-sample types (e.g. a single "FourSeamFastBall") from TABLES
+  # only. Plots stay unfiltered so those pitches remain visible/taggable.
+  p_keep_types <- reactive({
+    d <- p_filt(); if (is.null(d) || nrow(d)==0) return(character(0))
+    n <- input$p_min_type_n %||% 0
+    if (is.na(n) || n <= 0) return(sort(unique(d$TaggedPitchType)))
+    tt <- table(d$TaggedPitchType)
+    names(tt)[tt >= n]
+  })
+  # p_filt() restricted to kept pitch types — the source for pitch-type tables.
+  p_filt_tbl <- reactive({
+    d <- p_filt(); if (is.null(d)) return(NULL)
+    d %>% filter(TaggedPitchType %in% p_keep_types())
+  })
+
   # ── Admin login ────────────────────────────────────────────────────────────
   is_admin <- reactiveVal(FALSE)
 
@@ -1982,7 +2008,7 @@ server <- function(input, output, session) {
 
   p_arsenal_df <- reactive({
 
-    d<-p_filt();req(d,nrow(d)>0)
+    d<-p_filt_tbl();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Pitch=TaggedPitchType)%>%
       summarise(
         Pitches=n(),
@@ -2013,7 +2039,7 @@ server <- function(input, output, session) {
 
   p_results_df <- reactive({
 
-    d<-p_filt();req(d,nrow(d)>0)
+    d<-p_filt_tbl();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Pitch=TaggedPitchType)%>%
       summarise(Pitches=n(),PA=sum(PACheck,na.rm=TRUE),AB=sum(ABCheck,na.rm=TRUE),
                 H=sum(HCheck,na.rm=TRUE),
@@ -2068,7 +2094,7 @@ server <- function(input, output, session) {
 
   p_count_usage_df <- reactive({
 
-    d <- p_filt(); req(d, nrow(d)>0)
+    d <- p_filt_tbl(); req(d, nrow(d)>0)
     counts <- d %>%
       mutate(Count=paste0(Balls,"-",Strikes)) %>%
       group_by(Count) %>%
@@ -2090,7 +2116,7 @@ server <- function(input, output, session) {
 
   # ── Pitch Usage by Count Bucket (First Pitch, Hitter's/Pitcher's Count, Even, Two Strikes) ──
   p_count_bucket_usage_df <- reactive({
-    d <- p_filt(); req(d, nrow(d)>0)
+    d <- p_filt_tbl(); req(d, nrow(d)>0)
 
     d <- d %>%
       mutate(Bucket = dplyr::case_when(
@@ -2143,7 +2169,7 @@ server <- function(input, output, session) {
 
   p_lr_usage_df <- reactive({
 
-    d <- p_filt(); req(d, nrow(d)>0)
+    d <- p_filt_tbl(); req(d, nrow(d)>0)
     lr <- d %>%
       group_by(Side=BatterSide) %>%
       mutate(N_side=n()) %>%
@@ -2444,13 +2470,21 @@ server <- function(input, output, session) {
       labs(title=title_str,x=xlab,y=y_lab,color="Pitch Type")+
       theme_navs()
   }
+  # Velocity/Spin data — optionally drop pitches with no movement shape (IVB/HB)
+  vs_data <- reactive({
+    d <- p_filt()
+    if (is.null(d)) return(NULL)
+    if (isTRUE(input$p_vs_hide_noshape))
+      d <- d %>% filter(!is.na(InducedVertBreak), !is.na(HorzBreak))
+    d
+  })
   p_velo_plot <- reactive({
-    trend_plot(p_filt(),"RelSpeed","Velocity (MPH)",
+    trend_plot(vs_data(),"RelSpeed","Velocity (MPH)",
                paste(input$p_pitcher,"—",p_season(),"Velocity"),
                order_by=input$p_vs_order %||% "time")
   })
   p_spin_plot <- reactive({
-    trend_plot(p_filt(),"SpinRate","Spin Rate (RPM)",
+    trend_plot(vs_data(),"SpinRate","Spin Rate (RPM)",
                paste(input$p_pitcher,"—",p_season(),"Spin Rate"),
                order_by=input$p_vs_order %||% "time")
   })
@@ -2478,7 +2512,10 @@ server <- function(input, output, session) {
       key=~UID,
       marker=list(size=7, opacity=0.8), line=list(width=1),
       text=~paste0(TaggedPitchType,
-                   "<br>", y_lab, ": ", round(Yval,1),
+                   "<br>Velo: ", round(RelSpeed,1), " mph",
+                   "<br>Spin: ", round(SpinRate,0), " rpm",
+                   "<br>IVB: ", round(InducedVertBreak,1), " in",
+                   "<br>HB: ", round(HorzBreak,1), " in",
                    "<br>Date: ", Date,
                    "<br>Count: ", Balls, "-", Strikes),
       hoverinfo="text", source="p_vs_select"
@@ -2495,7 +2532,7 @@ server <- function(input, output, session) {
   }
 
   output$p_velo <- plotly::renderPlotly({
-    d <- p_filt(); req(d, nrow(d)>0)
+    d <- vs_data(); req(d, nrow(d)>0)
     trend_plotly(d, "RelSpeed", "Velocity (MPH)",
                  paste(input$p_pitcher,"—",p_season(),"Velocity"),
                  order_by=input$p_vs_order %||% "time")
@@ -2505,7 +2542,7 @@ server <- function(input, output, session) {
     content=function(file) save_plot_png(file, p_velo_plot(), width=10, height=6)
   )
   output$p_spin <- plotly::renderPlotly({
-    d <- p_filt(); req(d, nrow(d)>0)
+    d <- vs_data(); req(d, nrow(d)>0)
     trend_plotly(d, "SpinRate", "Spin Rate (RPM)",
                  paste(input$p_pitcher,"—",p_season(),"Spin Rate"),
                  order_by=input$p_vs_order %||% "time")
@@ -2567,7 +2604,7 @@ server <- function(input, output, session) {
   )
   p_ptHandTable_df <- reactive({
 
-    d<-p_filt();req(d,nrow(d)>0)
+    d<-p_filt_tbl();req(d,nrow(d)>0)
     tbl <- d%>%group_by(Pitch=TaggedPitchType,Side=BatterSide)%>%
       summarise(Pitches=n(),
                 `CSW%`=paste0(round(mean(CSWCheck,na.rm=TRUE)*100,1),"%"),
