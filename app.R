@@ -1156,6 +1156,14 @@ ui <- navbarPage(
         conditionalPanel("input.sr_mode == 'player'",
           tags$div(class="section-header",style="font-size:14px;","Sections to Include"),
           uiOutput("sr_sections_ui"),
+          tags$hr(),
+          tags$div(class="section-header",style="font-size:14px;","PDF Layout"),
+          radioButtons("sr_layout", NULL,
+            choices=c("One page per player"="player",
+                      "Group players together (big tables)"="combined"),
+            selected="player"),
+          tags$p(style="color:#6b7280;font-size:11px;margin-top:-6px;",
+                 "Group mode merges every player into one large table per section \u2014 best when picking only a section or two."),
           tags$hr()
         ),
 
@@ -3495,8 +3503,8 @@ server <- function(input, output, session) {
         d_all <- hitters_data() %>% filter(Season==as.integer(sr_season()))
       }
 
-      # Helper: build ggplot table
-      make_tbl_plot <- function(tbl, title_str) {
+      # Helper: build ggplot table (fsize scales text to fit the page)
+      make_tbl_plot <- function(tbl, title_str, fsize=3, title_size=10) {
         tbl[] <- lapply(tbl, as.character)
         n_cols <- ncol(tbl); n_rows <- nrow(tbl)
         col_names <- names(tbl)
@@ -3512,19 +3520,121 @@ server <- function(input, output, session) {
           geom_tile(aes(fill=is_header), color="grey70", linewidth=0.3) +
           geom_text(aes(fontface=ifelse(is_header,"bold","plain"),
                         color=ifelse(is_header,"#222222","#333333")),
-                    size=3, hjust=0.5) +
+                    size=fsize, hjust=0.5) +
           scale_fill_manual(values=c("FALSE"="white","TRUE"="#e8e8e8"),
                             guide="none") +
           scale_color_identity() +
           labs(title=title_str) +
           theme_void(base_size=9) +
-          theme(plot.title=element_text(face="bold",size=10,hjust=0,
+          theme(plot.title=element_text(face="bold",size=title_size,hjust=0,
                                          margin=margin(b=6)),
                 plot.margin=margin(10,10,10,10),
                 plot.background=element_rect(fill="white",color=NA))
       }
 
+      # Dark page header strip
+      page_header <- function(txt) {
+        grid::pushViewport(grid::viewport(x=0.5, y=0.965, width=1, height=0.07, just="center"))
+        grid::grid.rect(gp=grid::gpar(fill="#111111", col=NA))
+        grid::grid.text(txt, x=0.5, y=0.5,
+                        gp=grid::gpar(fontsize=13, col="white", fontface="bold"))
+        grid::popViewport()
+      }
+
+      # Strip dark theme off plot items for print
+      to_print_theme <- function(p) {
+        p + theme(plot.background=element_rect(fill="white",color=NA),
+                  panel.background=element_rect(fill="white",color=NA),
+                  panel.grid.major=element_line(color="grey85"),
+                  axis.text=element_text(color="#333333"),
+                  axis.title=element_text(color="#222222"),
+                  plot.title=element_text(color="#111111"),
+                  legend.background=element_rect(fill="white"),
+                  legend.text=element_text(color="#333333"),
+                  strip.background=element_rect(fill="grey90"),
+                  strip.text=element_text(color="#222222"))
+      }
+
+      build_for <- function(player) {
+        if (input$sr_type == "pitcher") build_pitcher_plots(player, sections, d_all, p_seqs_r())
+        else                            build_hitter_plots(player, sections, d_all)
+      }
+
+      # value -> human label for section headings
+      secmap  <- if (input$sr_type == "pitcher") pitcher_sections else hitter_sections
+      sec_label <- function(sec) {
+        lbl <- names(secmap)[match(sec, secmap)]
+        if (length(lbl)==0 || is.na(lbl)) sec else lbl
+      }
+
       pdf(file, width=17, height=11, onefile=TRUE)
+
+      if ((input$sr_layout %||% "player") == "combined") {
+        # ── Grouped mode: merge all players into one table per section ──────
+        per_player <- lapply(input$sr_players, function(pl) list(player=pl, items=build_for(pl)))
+        per_player <- Filter(function(x) length(x$items) > 0, per_player)
+
+        for (sec in sections) {
+          # Tables: stack every player's rows into one big table
+          tbls <- lapply(per_player, function(x) {
+            it <- x$items[[sec]]
+            if (is.null(it) || it$type != "table" || is.null(it$data)) return(NULL)
+            df <- it$data
+            df[] <- lapply(df, as.character)
+            cbind(Player=x$player, df, stringsAsFactors=FALSE)
+          })
+          tbls <- Filter(Negate(is.null), tbls)
+
+          if (length(tbls) > 0) {
+            big <- dplyr::bind_rows(tbls)
+            sec_lbl <- sec_label(sec)
+            rows_per_page <- 26
+            n_pg <- max(1, ceiling(nrow(big)/rows_per_page))
+            for (pg in seq_len(n_pg)) {
+              chunk <- big[((pg-1)*rows_per_page+1):min(pg*rows_per_page, nrow(big)), , drop=FALSE]
+              # scale font to how full the page is
+              fs <- if (nrow(chunk) <= 10) 4.6 else if (nrow(chunk) <= 18) 4.0 else 3.4
+              grid::grid.newpage()
+              page_header(paste0(input$sr_team,"    |    ",sr_season(),
+                                 " NECBL Scouting Report    |    ",
+                                 format(Sys.Date(),"%b %d, %Y"),
+                                 if (n_pg>1) paste0("    |    Page ",pg," of ",n_pg) else ""))
+              vp <- grid::viewport(x=0.5, y=0.46, width=0.97, height=0.90)
+              grid::pushViewport(vp)
+              print(make_tbl_plot(chunk, sec_lbl, fsize=fs, title_size=14), vp=grid::viewport())
+              grid::popViewport()
+            }
+          }
+
+          # Plots: small-multiples, 6 players per page (3 x 2)
+          plts <- lapply(per_player, function(x) {
+            it <- x$items[[sec]]
+            if (is.null(it) || it$type != "plot" || is.null(it$plot)) return(NULL)
+            to_print_theme(it$plot)
+          })
+          plts <- Filter(Negate(is.null), plts)
+          if (length(plts) > 0) {
+            per_pg <- 6; ncol <- 3; nrow <- 2
+            n_pg <- ceiling(length(plts)/per_pg)
+            sec_lbl <- sec_label(sec)
+            for (pg in seq_len(n_pg)) {
+              idx <- ((pg-1)*per_pg+1):min(pg*per_pg, length(plts))
+              grid::grid.newpage()
+              page_header(paste0(sec_lbl,"    |    ",input$sr_team,"    |    ",sr_season(),
+                                 if (n_pg>1) paste0("    |    Page ",pg," of ",n_pg) else ""))
+              grid::pushViewport(grid::viewport(x=0.5, y=0.46, width=0.98, height=0.90))
+              for (k in seq_along(idx)) {
+                r <- ceiling(k/ncol); c <- k - (r-1)*ncol
+                cvp <- grid::viewport(x=(c-0.5)/ncol, y=1-(r-0.5)/nrow,
+                                      width=1/ncol - 0.008, height=1/nrow - 0.008)
+                print(plts[[idx[k]]], vp=cvp)
+              }
+              grid::popViewport()
+            }
+          }
+        }
+
+      } else {
 
       for (player in input$sr_players) {
         if (input$sr_type == "pitcher") {
@@ -3538,18 +3648,12 @@ server <- function(input, output, session) {
         gg_items <- lapply(names(plot_list), function(nm) {
           item <- plot_list[[nm]]
           if (item$type == "plot" && !is.null(item$plot)) {
-            item$plot + theme(plot.background=element_rect(fill="white",color=NA),
-                              panel.background=element_rect(fill="white",color=NA),
-                              panel.grid.major=element_line(color="grey85"),
-                              axis.text=element_text(color="#333333"),
-                              axis.title=element_text(color="#222222"),
-                              plot.title=element_text(color="#111111"),
-                              legend.background=element_rect(fill="white"),
-                              legend.text=element_text(color="#333333"),
-                              strip.background=element_rect(fill="grey90"),
-                              strip.text=element_text(color="#222222"))
+            to_print_theme(item$plot)
           } else if (item$type == "table" && !is.null(item$data)) {
-            make_tbl_plot(item$data, item$title)
+            # fewer sections on the page -> bigger table text
+            make_tbl_plot(item$data, item$title,
+                          fsize=if (length(plot_list) <= 2) 4.6
+                                else if (length(plot_list) <= 4) 3.8 else 3)
           } else NULL
         })
         gg_items <- Filter(Negate(is.null), gg_items)
@@ -3564,13 +3668,8 @@ server <- function(input, output, session) {
         grid::grid.newpage()
 
         # Compact header strip across the top of the same page
-        grid::pushViewport(grid::viewport(x=0.5, y=0.965, width=1, height=0.07, just="center"))
-        grid::grid.rect(gp=grid::gpar(fill="#111111", col=NA))
-        grid::grid.text(
-          paste0(player,"    |    ",input$sr_team,"    |    ",sr_season(),
-                 " NECBL Scouting Report    |    ",format(Sys.Date(),"%b %d, %Y")),
-          x=0.5, y=0.5, gp=grid::gpar(fontsize=13, col="white", fontface="bold"))
-        grid::popViewport()
+        page_header(paste0(player,"    |    ",input$sr_team,"    |    ",sr_season(),
+                           " NECBL Scouting Report    |    ",format(Sys.Date(),"%b %d, %Y")))
 
         # Content grid fills the area below the header (with a bottom margin)
         content_vp <- grid::viewport(x=0.5, y=0.46, width=0.98, height=0.90)
@@ -3589,6 +3688,8 @@ server <- function(input, output, session) {
           print(gg_items[[i]], vp=vp)
         }
         grid::popViewport()
+      }
+
       }
 
       dev.off()
