@@ -258,9 +258,16 @@ Copy of 20260711-MontpelierRecreation-1.csv
 Copy of 20260711-MuzzyField-1.csv
 Copy of 20260711-OldMountain-1.csv
 Copy of 20260711-RogersPark-1.csv
+Copy of 20260712-GoodallPark-1.csv
 Copy of 20260712-GoodallPark-1_unverified.csv
+Copy of 20260712-Keene-1.csv
 Copy of 20260712-Keene-1_unverified.csv
+Copy of 20260712-Keene-2.csv
 Copy of 20260712-Keene-2_unverified.csv
+Copy of 20260712-MackenzieStadium-1.csv
 Copy of 20260712-MackenzieStadium-1_unverified.csv
+Copy of 20260712-MontpelierRecreation-3.csv
+Copy of 20260712-MuzzyField-1.csv
 Copy of 20260712-MuzzyField-1_unverified.csv
+Copy of 20260712-SharkTank-1.csv
 Copy of 20260712-SharkTank-1_unverified.csv
