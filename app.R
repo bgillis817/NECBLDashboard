@@ -531,6 +531,26 @@ save_table_xlsx <- function(file, tbl, sheet_name="Data") {
   openxlsx::saveWorkbook(wb, file, overwrite=TRUE)
 }
 
+# Static HTML table for the scouting-report preview. Calling DT::renderDataTable()
+# inside renderUI() produces tables with no output binding, so DataTables fails to
+# reach its Ajax endpoint ("Ajax error"). The preview is read-only, so plain HTML
+# is both correct and far lighter.
+static_tbl <- function(df) {
+  if (is.null(df) || nrow(df) == 0)
+    return(tags$p(style="color:#8892b0;font-size:12px;","No data."))
+  df[] <- lapply(df, as.character)
+  tags$div(style="overflow-x:auto;",
+    tags$table(class="prev-tbl",
+      tags$thead(tags$tr(lapply(names(df), function(n) tags$th(n)))),
+      tags$tbody(
+        lapply(seq_len(nrow(df)), function(i)
+          tags$tr(lapply(seq_len(ncol(df)),
+                         function(j) tags$td(df[i, j]))))
+      )
+    )
+  )
+}
+
 # UI: small download-as-PNG link, placed above a plot
 png_dl_btn <- function(id) {
   tags$div(style="text-align:right;margin-bottom:4px;",
@@ -597,6 +617,13 @@ table.dataTable tbody tr:hover{background:#1e2235!important;}
 .section-sub{color:#8892b0;font-size:12px;margin:0 0 16px 15px;}
 .filter-bar{background:#1a1e2e;border:1px solid #2a2d3a;border-radius:8px;
   padding:14px 18px;margin-bottom:18px;}
+/* Static preview tables — plain HTML, no DataTables/Ajax */
+.prev-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;}
+.prev-tbl th{background:#1e2235;color:#b0b8d4;padding:6px 10px;
+  border:1px solid #2a2d3a;text-align:left;font-weight:700;white-space:nowrap;}
+.prev-tbl td{background:#141720;color:#e8eaf0;padding:5px 10px;
+  border:1px solid #2a2d3a;white-space:nowrap;}
+.prev-tbl tr:nth-child(even) td{background:#1a1e2e;}
 .season-toggle{display:flex;gap:8px;margin-bottom:6px;}
 .season-btn{padding:6px 16px;border-radius:20px;border:1px solid #2e3350;
   background:#1e2235;color:#8892b0;cursor:pointer;font-size:13px;font-weight:600;
@@ -3467,9 +3494,7 @@ server <- function(input, output, session) {
         tagList(
           tags$h4(style="color:#fff;font-weight:700;margin:16px 0 8px;",
                   item$title),
-          DT::renderDataTable(
-            DT::datatable(item$data, options=dt_opts, rownames=FALSE)
-          )
+          static_tbl(item$data)
         )
       } else if (item$type == "plot" && !is.null(item$plot)) {
         tagList(
