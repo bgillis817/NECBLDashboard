@@ -912,14 +912,18 @@ ui <- navbarPage(
               tags$div(class="filter-bar",
                 fluidRow(
                   column(2, uiOutput("p_undefined_count")),
-                  column(3, uiOutput("p_reclass_count")),
-                  column(4,
+                  column(2, uiOutput("p_reclass_count")),
+                  column(3,
                     selectizeInput("p_reclass_newtype","New Pitch Type",
                                    choices=NULL, options=list(create=TRUE))
                   ),
                   column(1,
                     actionButton("p_reclass_apply","Apply",class="btn-primary",
                                   style="margin-top:24px;")
+                  ),
+                  column(2,
+                    actionButton("p_reclass_delete","Remove Pitches",
+                                  class="btn-default",style="margin-top:24px;")
                   ),
                   column(2,
                     actionButton("p_reclass_push","Push Corrections to GitHub",
@@ -1027,16 +1031,19 @@ ui <- navbarPage(
             conditionalPanel("output.p_is_admin == true",
               br(),
               tags$div(class="section-sub",
-                "Admin mode: lasso/box-select or click points on either chart above (click toggles a point), pick a pitch type, then Apply. Selections are shared with the Movement tab."),
+                "Admin mode: lasso/box-select or click points on either chart above (click toggles a point), then Apply a new type or Remove the pitches. Selections are shared with the Movement tab."),
               tags$div(class="filter-bar",
                 fluidRow(
-                  column(3, uiOutput("p_vs_reclass_count")),
-                  column(4,
+                  column(2, uiOutput("p_vs_reclass_count")),
+                  column(3,
                     selectizeInput("p_vs_reclass_newtype","New Pitch Type",
                                    choices=NULL, options=list(create=TRUE))),
                   column(2,
                     actionButton("p_vs_reclass_apply","Apply",class="btn-primary",
                                  style="margin-top:24px;")),
+                  column(2,
+                    actionButton("p_vs_reclass_delete","Remove Pitches",
+                                 class="btn-default",style="margin-top:24px;")),
                   column(3,
                     actionButton("p_vs_reclass_push","Push Corrections to GitHub",
                                  class="btn-default",style="margin-top:24px;"))
@@ -1989,6 +1996,49 @@ server <- function(input, output, session) {
                      type="message", duration=4)
   }
 
+  # Shared: mark the selected pitches for removal. Uses the same corrections
+  # plumbing with a sentinel NewType, so the nightly job drops the rows from
+  # NECBL_All.csv. For pitches Trackman misattributed to the wrong pitcher, etc.
+  DELETE_SENTINEL <- "__DELETE__"
+
+  do_delete <- function() {
+    ids <- reclass_selected_ids()
+    if (length(ids)==0) {
+      showNotification("Select pitches to remove first.", type="warning"); return(invisible())
+    }
+    raw <- .raw_cache$raw_all
+    idx <- which(as.character(raw$UID) %in% ids)
+    if (length(idx)==0) {
+      showNotification("No matching rows found in cache.", type="warning"); return(invisible())
+    }
+    log_rows <- data.frame(
+      RowID     = raw$RowID[idx],
+      Pitcher   = raw$Pitcher[idx],
+      Date      = as.character(raw$Date[idx]),
+      PitchNo   = raw$PitchNo[idx],
+      OldType   = raw$TaggedPitchType[idx],
+      NewType   = DELETE_SENTINEL,
+      Timestamp = format(Sys.time()),
+      stringsAsFactors = FALSE
+    )
+    # Drop from the in-session cache so the change is visible immediately
+    raw <- raw[-idx, , drop=FALSE]
+    .raw_cache$raw_all <- raw
+    .raw_cache$hitters_processed <- process_hitters(raw)
+    pit <- process_pitchers(raw)
+    .raw_cache$pitchers_processed <- pit
+    .raw_cache$p_data_all  <- if (!is.null(pit)) pit$data      else NULL
+    .raw_cache$p_seqs_all  <- if (!is.null(pit)) pit$sequences else NULL
+    .raw_cache$p_pairs_all <- if (!is.null(pit)) pit$pairs     else NULL
+    existing_log <- reclass_pending_log()
+    reclass_pending_log(if (is.null(existing_log)) log_rows else dplyr::bind_rows(existing_log, log_rows))
+    reclass_selected_ids(character(0))
+    refresh_trigger(refresh_trigger() + 1)
+    showNotification(paste0("Marked ", length(idx),
+                            " pitch(es) for removal. Push to GitHub to make permanent."),
+                     type="message", duration=5)
+  }
+
   # Shared: push accumulated corrections to GitHub
   do_push <- function() {
     log <- reclass_pending_log()
@@ -2014,6 +2064,27 @@ server <- function(input, output, session) {
 
   observeEvent(input$p_reclass_apply,    { req(is_admin()); do_reclass(input$p_reclass_newtype) })
   observeEvent(input$p_vs_reclass_apply, { req(is_admin()); do_reclass(input$p_vs_reclass_newtype) })
+
+  # Delete: confirm first (destructive), then mark for removal
+  confirm_delete_modal <- function() {
+    n <- length(reclass_selected_ids())
+    showModal(modalDialog(
+      title = "Remove pitches?",
+      tags$p(paste0("This will remove ", n, " selected pitch(es) from the dataset.")),
+      tags$p(style="color:#8892b0;font-size:12px;",
+             "They disappear from this session immediately. Pushing to GitHub makes it permanent (the nightly Update drops them from NECBL_All.csv). Recoverable from git history if needed."),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("p_delete_confirm", "Remove", class="btn-primary")
+      ),
+      easyClose = TRUE
+    ))
+  }
+  observeEvent(input$p_reclass_delete,    { req(is_admin()); confirm_delete_modal() })
+  observeEvent(input$p_vs_reclass_delete, { req(is_admin()); confirm_delete_modal() })
+  observeEvent(input$p_delete_confirm, {
+    req(is_admin()); removeModal(); do_delete()
+  })
   observeEvent(input$p_reclass_push,     { req(is_admin()); do_push() })
   observeEvent(input$p_vs_reclass_push,  { req(is_admin()); do_push() })
 
