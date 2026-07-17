@@ -174,20 +174,50 @@ jobs:
                   # Keep only the most recent correction per RowID
                   corrections = corrections.sort_values('Timestamp').drop_duplicates('_RowID', keep='last')
 
-                  type_map = dict(zip(corrections['_RowID'], corrections['NewType']))
+                  # Split: rows marked for removal vs. type reclassifications
+                  DELETE_SENTINEL = "__DELETE__"
+                  del_mask  = corrections['NewType'].astype(str) == DELETE_SENTINEL
+                  deletions = corrections[del_mask]
+                  retypes   = corrections[~del_mask]
+
+                  type_map = dict(zip(retypes['_RowID'], retypes['NewType']))
                   matched = data['_RowID'].isin(type_map)
                   n_matched = matched.sum()
 
+                  matched_ids = set(data.loc[matched, '_RowID'])
+
                   data.loc[matched, 'TaggedPitchType'] = data.loc[matched, '_RowID'].map(type_map)
+
+                  # Physically drop pitches marked for removal (e.g. Trackman
+                  # misattributed them to the wrong pitcher).
+                  n_deleted = 0
+                  deleted_ids = set()
+                  if len(deletions) > 0:
+                      del_ids = set(deletions['_RowID'])
+                      drop_mask = data['_RowID'].isin(del_ids)
+                      n_deleted = int(drop_mask.sum())
+                      deleted_ids = set(data.loc[drop_mask, '_RowID'])
+                      data = data[~drop_mask]
+                      print(f"Removed {n_deleted} pitch row(s) marked for deletion")
+
+                  matched_ids |= deleted_ids
                   data = data.drop(columns=['_RowID'])
                   data['Date'] = data['Date'].dt.strftime('%Y-%m-%d')
 
                   data.to_csv(data_path, index=False)
-                  print(f"Applied {n_matched} corrections out of {len(corrections)} logged")
+                  print(f"Applied {n_matched} corrections out of {len(retypes)} retype(s) logged")
+                  print(f"Deleted {n_deleted} row(s) from {len(deletions)} deletion instruction(s)")
+                  print(f"NECBL_All.csv now has {len(data)} rows")
 
-                  # Clear corrections file (keep header for next append)
-                  pd.DataFrame(columns=corrections.columns.drop('_RowID', errors='ignore')).to_csv(corrections_path, index=False)
-                  print("Cleared corrections.csv")
+                  # Keep any correction that matched no row instead of silently
+                  # destroying it, so a bad key can be investigated rather than lost.
+                  leftover = corrections[~corrections['_RowID'].isin(matched_ids)].drop(columns=['_RowID'])
+                  if len(leftover) > 0:
+                      print(f"WARNING: {len(leftover)} correction(s) matched no row — keeping them in corrections.csv")
+                      for _, r in leftover.head(10).iterrows():
+                          print(f"  unmatched: {r.get('Pitcher')} | {r.get('Date')} | PitchNo={r.get('PitchNo')}")
+                  leftover.to_csv(corrections_path, index=False)
+                  print(f"corrections.csv now holds {len(leftover)} pending row(s)")
           EOF
 
       - name: Commit updated data
