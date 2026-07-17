@@ -3472,39 +3472,74 @@ server <- function(input, output, session) {
   }
 
   # ── Preview (first selected player) ──────────────────────────────────────
-  output$sr_preview_ui <- renderUI({
+  # Built once as a debounced reactive so rapid checkbox toggling doesn't rebuild
+  # every plot on each click. Plot outputs are declared ONCE below against a fixed
+  # slot pool; renderUI only *references* them. Calling renderPlot()/renderDataTable()
+  # inside renderUI creates a new, unbound output on every re-render — those leak
+  # and eventually take the R process down ("disconnected from server").
+  SR_MAX_PREVIEW_PLOTS <- 12
+
+  sr_preview_items <- reactive({
     req(input$sr_players, length(input$sr_players)>0,
         input$sr_sections, length(input$sr_sections)>0)
-    player <- input$sr_players[1]
+    player   <- input$sr_players[1]
     sections <- input$sr_sections
-
     if (input$sr_type == "pitcher") {
       d <- p_data_r() %>% filter(Season==as.integer(sr_season()))
-      plots <- build_pitcher_plots(player, sections, d, p_seqs_r())
+      build_pitcher_plots(player, sections, d, p_seqs_r())
     } else {
       d <- hitters_data() %>% filter(Season==as.integer(sr_season()))
-      plots <- build_hitter_plots(player, sections, d)
+      build_hitter_plots(player, sections, d)
     }
+  }) %>% shiny::debounce(700)
 
-    if (length(plots) == 0)
+  # Just the plot-type items, in display order
+  sr_preview_plots <- reactive({
+    items <- sr_preview_items()
+    Filter(function(x) x$type=="plot" && !is.null(x$plot), items)
+  })
+
+  # Fixed pool of plot outputs — created once, reused forever
+  for (i in seq_len(SR_MAX_PREVIEW_PLOTS)) {
+    local({
+      idx <- i
+      output[[paste0("sr_prev_plot_", idx)]] <- renderPlot({
+        plts <- sr_preview_plots()
+        req(length(plts) >= idx)
+        plts[[idx]]$plot
+      }, bg="#0f1117")
+    })
+  }
+
+  output$sr_preview_ui <- renderUI({
+    items <- sr_preview_items()
+    player <- input$sr_players[1]
+
+    if (length(items) == 0)
       return(tags$p(style="color:#8892b0;","No data available for this player."))
 
-    items <- lapply(plots, function(item) {
+    plot_i <- 0
+    ui_items <- lapply(items, function(item) {
       if (item$type == "table") {
         tagList(
-          tags$h4(style="color:#fff;font-weight:700;margin:16px 0 8px;",
-                  item$title),
+          tags$h4(style="color:#fff;font-weight:700;margin:16px 0 8px;", item$title),
           static_tbl(item$data)
         )
       } else if (item$type == "plot" && !is.null(item$plot)) {
-        tagList(
-          renderPlot(item$plot, height=320, bg="#0f1117")
-        )
-      }
+        plot_i <<- plot_i + 1
+        if (plot_i > SR_MAX_PREVIEW_PLOTS) return(NULL)
+        plotOutput(paste0("sr_prev_plot_", plot_i), height="320px")
+      } else NULL
     })
+    ui_items <- Filter(Negate(is.null), ui_items)
+
     tagList(
       tags$h3(style="color:#ff4655;font-weight:700;margin-bottom:16px;", player),
-      tagList(items)
+      if (plot_i > SR_MAX_PREVIEW_PLOTS)
+        tags$p(style="color:#8892b0;font-size:12px;",
+               paste0("Showing first ", SR_MAX_PREVIEW_PLOTS,
+                      " charts in preview \u2014 the PDF includes all selected sections.")),
+      tagList(ui_items)
     )
   })
 
