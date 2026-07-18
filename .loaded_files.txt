@@ -288,3 +288,8 @@ Copy of 20260715-FraserField-1.csv
 Copy of 20260715-MackenzieStadium-1.csv
 Copy of 20260715-MaxfieldSC-1.csv
 Copy of 20260715-NorthAdams-1.csv
+Copy of 20260716-Keene-1.csv
+Copy of 20260716-MackenzieStadium-1.csv
+Copy of 20260716-MuzzyField-1.csv
+Copy of 20260716-RogersPark-1.csv
+Copy of 20260716-RogersPark-2.csv
