@@ -1,1 +1,3 @@
-RowID,Pitcher,Date,PitchNo,OldType,NewType,Timestamp
+"RowID","Pitcher","Date","PitchNo","OldType","NewType","Timestamp"
+"Updike, Scout__2026-07-11__242","Updike, Scout","2026-07-11","242","Fastball","__DELETE__","2026-07-18 03:20:29"
+"Updike, Scout__2026-07-11__245","Updike, Scout","2026-07-11","245","Fastball","__DELETE__","2026-07-18 03:20:29"
