@@ -293,3 +293,8 @@ Copy of 20260716-MackenzieStadium-1.csv
 Copy of 20260716-MuzzyField-1.csv
 Copy of 20260716-RogersPark-1.csv
 Copy of 20260716-RogersPark-2.csv
+Copy of 20260717-CardinesField-1.csv
+Copy of 20260717-GoodallPark-1.csv
+Copy of 20260717-MuzzyField-2.csv
+Copy of 20260717-SharkTank-1.csv
+Copy of 20260718-FraserField-1.csv
