@@ -147,42 +147,60 @@ jobs:
 
           # Persistent map (NOT cleared): Trackman may keep emitting the
           # misspelled name in future files, so re-apply every night.
-          if not os.path.exists(name_path):
-              print("No name_corrections.csv — skipping")
-          elif not os.path.exists(data_path):
+          if not os.path.exists(data_path):
               print("No NECBL_All.csv — skipping")
           else:
-              nmap = pd.read_csv(name_path, low_memory=False)
-              if len(nmap) == 0:
-                  print("name_corrections.csv is empty — skipping")
-              else:
-                  data = pd.read_csv(data_path, low_memory=False)
-                  total = 0
+              data = pd.read_csv(data_path, low_memory=False)
+
+              # 1) Strip stray whitespace from player names. Trackman operators
+              #    sometimes enter "Lazaro, Danny " (trailing space), silently
+              #    splitting one player into two profiles and defeating exact-
+              #    match merges. Runs every night; fixes future uploads too.
+              n_ws = 0
+              for col in ("Pitcher", "Batter"):
+                  if col in data.columns:
+                      s = data[col].astype(str)
+                      changed = s != s.str.strip()
+                      n_ws += int(changed.sum())
+                      data[col] = s.str.strip()
+              print(f"Whitespace-normalized {n_ws} name cell(s)")
+
+              # 2) Apply explicit wrong->correct name mappings
+              total = 0
+              if os.path.exists(name_path):
+                  nmap = pd.read_csv(name_path, low_memory=False)
                   for _, r in nmap.iterrows():
-                      w, c = str(r["WrongName"]), str(r["CorrectName"])
+                      w = str(r["WrongName"]).strip()
+                      c = str(r["CorrectName"]).strip()
                       for col in ("Pitcher", "Batter"):
                           if col in data.columns:
                               m = data[col] == w
                               total += int(m.sum())
                               data.loc[m, col] = c
-                  data.to_csv(data_path, index=False)
                   print(f"Applied {len(nmap)} name merge(s); {total} cell(s) renamed")
+              else:
+                  print("No name_corrections.csv — whitespace cleanup only")
 
-                  # Also rename inside pending pitch corrections so old logs
-                  # keyed to the misspelled name still match after the merge.
-                  cpath = "corrections.csv"
-                  if os.path.exists(cpath):
-                      corr = pd.read_csv(cpath, low_memory=False)
-                      if len(corr) and "Pitcher" in corr.columns:
-                          ch = 0
-                          for _, r in nmap.iterrows():
-                              w, c = str(r["WrongName"]), str(r["CorrectName"])
-                              m = corr["Pitcher"] == w
-                              ch += int(m.sum())
-                              corr.loc[m, "Pitcher"] = c
-                          if ch:
-                              corr.to_csv(cpath, index=False)
-                              print(f"Renamed {ch} pending correction row(s)")
+              data.to_csv(data_path, index=False)
+
+              # Also rename inside pending pitch corrections so old logs
+              # keyed to the misspelled name still match after the merge.
+              cpath = "corrections.csv"
+              if os.path.exists(cpath) and os.path.exists(name_path):
+                  corr = pd.read_csv(cpath, low_memory=False)
+                  if len(corr) and "Pitcher" in corr.columns:
+                      corr["Pitcher"] = corr["Pitcher"].astype(str).str.strip()
+                      ch = 0
+                      nmap = pd.read_csv(name_path, low_memory=False)
+                      for _, r in nmap.iterrows():
+                          w = str(r["WrongName"]).strip()
+                          c = str(r["CorrectName"]).strip()
+                          m = corr["Pitcher"] == w
+                          ch += int(m.sum())
+                          corr.loc[m, "Pitcher"] = c
+                      if ch:
+                          corr.to_csv(cpath, index=False)
+                          print(f"Renamed {ch} pending correction row(s)")
           EOF
 
       - name: Apply pitch reclassification corrections
