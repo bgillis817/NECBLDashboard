@@ -873,6 +873,22 @@ ui <- navbarPage(
             br(),
             tags$div(class="section-header","Pitch Arsenal"),
             tagList(table_dl_btns("p_arsenal"), dataTableOutput("p_arsenal")),
+            conditionalPanel("output.p_is_admin == true",
+              tags$div(class="filter-bar", style="margin-top:10px;",
+                tags$p(style="color:#8892b0;font-size:12px;margin:0 0 8px;",
+                  "Admin: select pitch-type row(s) in the table above, then remove every pitch of those types for this pitcher/outing(s). Use this for stray types with no movement data (e.g. a handful of \"Other\") that can't be lasso-selected on the Movement plot."),
+                fluidRow(
+                  column(4, uiOutput("p_arsenal_rm_count")),
+                  column(4,
+                    actionButton("p_arsenal_remove","Remove Selected Pitch Type(s)",
+                                 class="btn-default", style="margin-top:6px;")),
+                  column(4,
+                    actionButton("p_arsenal_push","Push Corrections to GitHub",
+                                 class="btn-default", style="margin-top:6px;"))
+                ),
+                uiOutput("p_arsenal_rm_status")
+              )
+            ),
             br(),
             tags$div(class="section-header","Results by Pitch Type"),
             tagList(table_dl_btns("p_results"), dataTableOutput("p_results")),
@@ -2065,6 +2081,75 @@ server <- function(input, output, session) {
   observeEvent(input$p_reclass_apply,    { req(is_admin()); do_reclass(input$p_reclass_newtype) })
   observeEvent(input$p_vs_reclass_apply, { req(is_admin()); do_reclass(input$p_vs_reclass_newtype) })
 
+  # ── Remove pitches by Arsenal-table row (for shapeless types the movement
+  #    plot can't reach, e.g. a stray "Other" with no IVB/HB). Selecting a row
+  #    targets EVERY pitch of that type for the current pitcher/outing filter.
+  arsenal_rm_ids <- reactive({
+    d <- p_filt(); if (is.null(d) || nrow(d)==0) return(character(0))
+    rows <- input$p_arsenal_rows_selected
+    if (is.null(rows) || length(rows)==0) return(character(0))
+    tbl <- p_arsenal_df(); if (is.null(tbl) || nrow(tbl)==0) return(character(0))
+    rows <- rows[rows >= 1 & rows <= nrow(tbl)]
+    types <- as.character(tbl$Pitch[rows])
+    as.character(d$UID[d$TaggedPitchType %in% types])
+  })
+
+  output$p_arsenal_rm_count <- renderUI({
+    ids <- arsenal_rm_ids()
+    tbl <- p_arsenal_df()
+    rows <- input$p_arsenal_rows_selected
+    types <- if (!is.null(rows) && !is.null(tbl) && length(rows)>0)
+      paste(as.character(tbl$Pitch[rows[rows<=nrow(tbl)]]), collapse=", ") else "\u2014"
+    tags$div(class="stat-card", style="padding:10px 14px;",
+      tags$h2(style="font-size:22px;", length(ids)),
+      tags$p(paste0("pitches \u2014 ", types)))
+  })
+
+  output$p_arsenal_rm_status <- renderUI({
+    log <- reclass_pending_log()
+    n <- if (is.null(log)) 0 else nrow(log)
+    tags$p(style="color:#8892b0;font-size:12px;margin-top:8px;",
+           paste0(n," correction(s) applied this session and pending push to GitHub."))
+  })
+
+  observeEvent(input$p_arsenal_remove, {
+    req(is_admin())
+    ids <- arsenal_rm_ids()
+    if (length(ids)==0) {
+      showNotification("Select at least one pitch-type row in the Arsenal table first.",
+                       type="warning"); return()
+    }
+    tbl <- p_arsenal_df()
+    rows <- input$p_arsenal_rows_selected
+    types <- paste(as.character(tbl$Pitch[rows[rows<=nrow(tbl)]]), collapse=", ")
+    showModal(modalDialog(
+      title = "Remove pitches by type?",
+      tags$p(paste0("This will remove all ", length(ids),
+                    " pitch(es) of type: ", types,
+                    " for ", input$p_pitcher %||% "this pitcher",
+                    " in the selected outing(s).")),
+      tags$p(style="color:#8892b0;font-size:12px;",
+             "They disappear from this session immediately. Pushing to GitHub makes it permanent (the nightly Update drops them from NECBL_All.csv). Recoverable from git history if needed."),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("p_arsenal_remove_confirm","Remove", class="btn-primary")
+      ),
+      easyClose = TRUE
+    ))
+  })
+
+  observeEvent(input$p_arsenal_remove_confirm, {
+    req(is_admin()); removeModal()
+    ids <- arsenal_rm_ids()
+    if (length(ids)==0) return()
+    # Route through the same delete path used by the movement/velocity tabs
+    reclass_selected_ids(ids)
+    do_delete()
+    dataTableProxy("p_arsenal") %>% selectRows(NULL)
+  })
+
+  observeEvent(input$p_arsenal_push, { req(is_admin()); do_push() })
+
   # Delete: confirm first (destructive), then mark for removal
   confirm_delete_modal <- function() {
     n <- length(reclass_selected_ids())
@@ -2133,7 +2218,10 @@ server <- function(input, output, session) {
       dplyr::select(Pitch,Pitches,Usage,`Avg Velo`,`Max Velo`,Spin,IVB,HB,`CSW%`,`Zone%`,`Whiff%`)
     tbl
   })
-  output$p_arsenal <- renderDataTable({ datatable(p_arsenal_df(), options=dt_opts, rownames=FALSE) })
+  output$p_arsenal <- renderDataTable({
+    sel <- if (isTRUE(is_admin())) "multiple" else "none"
+    datatable(p_arsenal_df(), options=dt_opts, rownames=FALSE, selection=sel)
+  })
   output$p_arsenal_png <- downloadHandler(
     filename=function() "PitchArsenal.png",
     content=function(file) save_table_png(file, p_arsenal_df())
