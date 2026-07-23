@@ -45,9 +45,11 @@ jobs:
       - name: Write admin credentials
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           echo "$ADMIN_PASSWORD" > admin_password.txt
+          echo "$APP_PASSWORD" > app_password.txt
           echo "$GH_PAT" > gh_pat.txt
 
       - name: Deploy to shinyapps.io
