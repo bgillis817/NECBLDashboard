@@ -1015,7 +1015,7 @@ main_ui <- navbarPage(
               fluidRow(
                 column(4,
                   selectInput("p_seq_metric","Matrix Metric",
-                    choices=c("CSW%"="csw_rate","Whiff%"="whiff_rate",
+                    choices=c("Usage%"="usage","CSW%"="csw_rate","Whiff%"="whiff_rate",
                               "Zone%"="zone_rate","Chase%"="chase_rate"))
                 ),
                 column(4,
@@ -1042,7 +1042,12 @@ main_ui <- navbarPage(
                 br(),
                 uiOutput("p_seq_stats")
               )
-            )
+            ),
+            br(),
+            tags$div(class="section-header","Doubled-Up / Sequencing Usage"),
+            tags$div(class="section-sub",
+              "Row = first pitch; each cell = % of the time that pitch is followed by the column pitch (row-normalized within each first pitch). \u201cTotal (1st)\u201d = times that pitch started a pair. Respects the Batter Side selector above."),
+            tagList(table_dl_btns("p_seq_usage"), dataTableOutput("p_seq_usage"))
           ),
           tabPanel("Heat Maps",
             br(),
@@ -2540,13 +2545,28 @@ server <- function(input, output, session) {
     all_types <- sort(unique(c(d$prev_type,d$TaggedPitchType)))
     mat <- expand.grid(prev_type=all_types,TaggedPitchType=all_types,stringsAsFactors=FALSE)%>%
       left_join(d,by=c("prev_type","TaggedPitchType"))%>%
-      mutate(val=.data[[metric]],n_pairs=ifelse(is.na(n_pairs),0L,n_pairs),
-             label=ifelse(n_pairs>0,paste0(round(val*100,0),"%\n(n=",n_pairs,")"),""))
-    metric_lbl <- c(csw_rate="CSW%",whiff_rate="Whiff%",zone_rate="Zone%",chase_rate="Chase%")[metric]
+      mutate(n_pairs=ifelse(is.na(n_pairs),0L,n_pairs))
+    if (metric=="usage") {
+      # Row-normalized usage: given the first pitch, % of the time each pitch
+      # follows it (how often the pitcher doubles up, goes fastball->slider, etc).
+      mat <- mat %>%
+        group_by(prev_type) %>%
+        mutate(row_tot=sum(n_pairs),
+               val=ifelse(row_tot>0, n_pairs/row_tot, NA_real_)) %>%
+        ungroup() %>%
+        mutate(label=ifelse(n_pairs>0,paste0(round(val*100,0),"%\n(n=",n_pairs,")"),""))
+    } else {
+      mat <- mat %>%
+        mutate(val=.data[[metric]],
+               label=ifelse(n_pairs>0,paste0(round(val*100,0),"%\n(n=",n_pairs,")"),""))
+    }
+    metric_lbl <- c(usage="Usage%",csw_rate="CSW%",whiff_rate="Whiff%",
+                    zone_rate="Zone%",chase_rate="Chase%")[metric]
+    mid_pt <- if (metric=="usage") 0.33 else 0.4
     ggplot(mat,aes(x=prev_type,y=TaggedPitchType,fill=val))+
       geom_tile(color="#0f1117",linewidth=1.2)+
       geom_text(aes(label=label),size=3.5,fontface="bold",color="#ffffff",lineheight=.85)+
-      scale_fill_gradient2(low="#1565c0",mid="#1a1e2e",high="#ff4655",midpoint=.4,
+      scale_fill_gradient2(low="#1565c0",mid="#1a1e2e",high="#ff4655",midpoint=mid_pt,
                            na.value="#1a1e2e",limits=c(0,1),
                            labels=scales::percent_format(),name=metric_lbl)+
       labs(x="First Pitch (Previous)",y="Second Pitch (Current)",
@@ -2625,6 +2645,36 @@ server <- function(input, output, session) {
       tags$p(style="color:#8892b0;margin:4px 0;","Chase%: ",strong(paste0(round(pair$chase_rate*100,1),"%")))
     )
   })
+
+  # ── Doubled-Up / Sequencing Usage table ───────────────────────────────────
+  # Row = first pitch, columns = each second pitch, cell = % of the time the
+  # first pitch is followed by that pitch (row-normalized). Respects p_seq_hand.
+  p_seq_usage_df <- reactive({
+    req(!is.null(p_seqs()), input$p_pitcher)
+    d <- p_seqs() %>% filter(Pitcher==input$p_pitcher)
+    hand <- input$p_seq_hand %||% "All"
+    if (hand!="All") d <- d %>% filter(BatterSide==hand)
+    req(nrow(d)>0)
+    d %>%
+      group_by(`First Pitch`=prev_type) %>%
+      mutate(N=n()) %>%
+      group_by(`First Pitch`, N, Next=TaggedPitchType) %>%
+      summarise(np=n(), .groups="drop") %>%
+      mutate(Usage=paste0(round(np/N*100,1),"%")) %>%
+      dplyr::select(`First Pitch`, N, Next, Usage) %>%
+      tidyr::pivot_wider(names_from=Next, values_from=Usage, values_fill="0%") %>%
+      rename(`Total (1st)`=N) %>%
+      arrange(desc(`Total (1st)`))
+  })
+  output$p_seq_usage <- renderDataTable({ datatable(p_seq_usage_df(), options=dt_opts, rownames=FALSE) })
+  output$p_seq_usage_png <- downloadHandler(
+    filename=function() "SequencingUsage.png",
+    content=function(file) save_table_png(file, p_seq_usage_df(), "Sequencing Usage (1st -> 2nd, row %)")
+  )
+  output$p_seq_usage_xlsx <- downloadHandler(
+    filename=function() "SequencingUsage.xlsx",
+    content=function(file) save_table_xlsx(file, p_seq_usage_df(), "Sequencing Usage")
+  )
 
   # ── Heat maps (pitcher) ───────────────────────────────────────────────────
   output$p_hm_pitch_ui <- renderUI({
@@ -3504,6 +3554,27 @@ server <- function(input, output, session) {
         )
       plots[["velo_spin"]] <- list(type="table",data=tbl,
                                     title=paste(pitcher_name,"— Velocity & Spin"))
+    }
+
+    if ("sequencing" %in% sections && !is.null(p_seqs_df)) {
+      # Doubled-up / sequencing usage: given the first pitch, % of the time each
+      # pitch follows it (row-normalized). Same numbers as the dashboard's
+      # Sequencing Usage table, rendered here for the PDF/preview.
+      sq <- p_seqs_df %>%
+        filter(Pitcher==pitcher_name, Season %in% unique(d$Season))
+      if (nrow(sq) > 0) {
+        tbl <- sq %>%
+          group_by(`First Pitch`=prev_type) %>% mutate(N=n()) %>%
+          group_by(`First Pitch`, N, Next=TaggedPitchType) %>%
+          summarise(np=n(), .groups="drop") %>%
+          mutate(Usage=paste0(round(np/N*100,0),"%")) %>%
+          dplyr::select(`First Pitch`, N, Next, Usage) %>%
+          tidyr::pivot_wider(names_from=Next, values_from=Usage, values_fill="0%") %>%
+          rename(`1st Total`=N) %>%
+          arrange(desc(`1st Total`))
+        plots[["sequencing"]] <- list(type="table", data=tbl,
+          title=paste(pitcher_name,"— Sequencing Usage (1st \u2192 2nd, row %)"))
+      }
     }
 
     Filter(Negate(is.null), plots)
