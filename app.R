@@ -879,6 +879,42 @@ main_ui <- navbarPage(
               )
             ),
             tagList(png_dl_btn("h_heatmap_png"), plotOutput("h_heatmap",height="460px"))
+          ),
+          tabPanel("Pitch Correction",
+            br(),
+            conditionalPanel("output.p_is_admin != true",
+              tags$div(class="section-sub",
+                "Admin only. Unlock with the admin password in the sidebar to correct the pitch types this batter has seen.")
+            ),
+            conditionalPanel("output.p_is_admin == true",
+              tags$div(class="section-header","Correct Pitches Seen"),
+              tags$div(class="section-sub",
+                "Every pitch this batter has faced, by movement. Lasso/box-select points (or click to toggle), then reclassify or remove. Fixes the shared pitch record, so it corrects the pitcher's data too. Use the table below for stray types with no movement data."),
+              tags$div(class="filter-bar",
+                fluidRow(
+                  column(3, uiOutput("hc_count")),
+                  column(3,
+                    selectizeInput("hc_newtype","New Pitch Type",
+                                   choices=NULL, options=list(create=TRUE))),
+                  column(2,
+                    actionButton("hc_apply","Apply", class="btn-primary",
+                                 style="margin-top:24px;")),
+                  column(2,
+                    actionButton("hc_remove","Remove", class="btn-default",
+                                 style="margin-top:24px;")),
+                  column(2,
+                    actionButton("hc_push","Push to GitHub", class="btn-default",
+                                 style="margin-top:24px;"))
+                )
+              ),
+              uiOutput("hc_status"),
+              plotly::plotlyOutput("hc_movement", height="440px"),
+              br(),
+              tags$div(class="section-header","Pitch Types Seen (table select)"),
+              tags$div(class="section-sub",
+                "Select row(s), then Remove or Apply a new type to every pitch of that type this batter has seen \u2014 including shapeless ones not shown on the plot above."),
+              dataTableOutput("hc_table")
+            )
           )
         )
       )
@@ -2180,6 +2216,159 @@ server <- function(input, output, session) {
   observeEvent(input$p_reclass_apply,    { req(is_admin()); do_reclass(input$p_reclass_newtype) })
   observeEvent(input$p_vs_reclass_apply, { req(is_admin()); do_reclass(input$p_vs_reclass_newtype) })
 
+  # ══════════════════════════════════════════════════════════════════════════
+  # BATTER-SIDE PITCH CORRECTION
+  # All pitches a batter has SEEN, corrected via the same shared plumbing
+  # (do_reclass / do_delete on .raw_cache$raw_all by UID). Because a pitch is
+  # one physical row, this also fixes the pitcher's record. Has its OWN plot
+  # selection source so it never collides with the pitcher tabs' selection.
+  # ══════════════════════════════════════════════════════════════════════════
+  hc_selected_ids <- reactiveVal(character(0))
+
+  # All pitches the current batter has seen (admin view: nothing hidden)
+  hc_data <- reactive({
+    req(is_admin(), input$h_batter, !is.null(h_raw()))
+    d <- h_raw() %>% filter(Batter == input$h_batter)
+    if (!is.null(input$h_dateRange))
+      d <- d %>% filter(Date>=input$h_dateRange[1], Date<=input$h_dateRange[2])
+    d
+  })
+
+  # Movement plot of seen pitches (only those with shape); selectable
+  output$hc_movement <- plotly::renderPlotly({
+    d <- hc_data(); req(d, nrow(d)>0)
+    d <- d %>% filter(!is.na(HorzBreak), !is.na(InducedVertBreak))
+    req(nrow(d)>0)
+    d$UID <- as.character(d$UID)
+    plotly::plot_ly(
+      d, x=~HorzBreak, y=~InducedVertBreak, color=~TaggedPitchType,
+      customdata=~UID, key=~UID, type="scatter", mode="markers",
+      marker=list(size=8, opacity=0.8),
+      text=~paste0(TaggedPitchType,
+                   "<br>Pitcher: ", Pitcher,
+                   "<br>Date: ", Date,
+                   "<br>Velo: ", round(RelSpeed,1),
+                   "<br>IVB: ", round(InducedVertBreak,1), " in",
+                   "<br>HB: ", round(HorzBreak,1), " in",
+                   "<br>Count: ", Balls, "-", Strikes),
+      hoverinfo="text", source="hc_movement_select"
+    ) %>%
+      plotly::layout(
+        title=list(text=paste0(input$h_batter, " \u2014 Pitches Seen"),
+                   font=list(color="#ffffff")),
+        xaxis=list(title="Horizontal Break (in)", range=c(-30,30),
+                   gridcolor="#2a2d3a", color="#b0b8d4", zerolinecolor="#2a2d3a"),
+        yaxis=list(title="Induced Vertical Break (in)", range=c(-30,30),
+                   gridcolor="#2a2d3a", color="#b0b8d4", zerolinecolor="#2a2d3a"),
+        paper_bgcolor="#0f1117", plot_bgcolor="#141720",
+        legend=list(font=list(color="#b0b8d4")),
+        dragmode="lasso"
+      ) %>%
+      plotly::config(displaylogo=FALSE,
+                     modeBarButtonsToAdd=c("lasso2d","select2d")) %>%
+      plotly::event_register("plotly_selected")
+  })
+
+  observeEvent(plotly::event_data("plotly_selected", source="hc_movement_select"), {
+    sel <- plotly::event_data("plotly_selected", source="hc_movement_select")
+    if (!is.null(sel) && nrow(sel)>0) {
+      ids <- if (!is.null(sel$key)) sel$key else sel$customdata
+      hc_selected_ids(unique(as.character(ids)))
+    }
+  })
+  observeEvent(plotly::event_data("plotly_click", source="hc_movement_select"), {
+    cl <- plotly::event_data("plotly_click", source="hc_movement_select")
+    if (!is.null(cl) && nrow(cl)>0) {
+      id <- as.character(if (!is.null(cl$key)) cl$key else cl$customdata)
+      cur <- hc_selected_ids()
+      hc_selected_ids(if (id %in% cur) setdiff(cur, id) else c(cur, id))
+    }
+  })
+
+  # Table of pitch types seen (catches shapeless pitches the plot can't show)
+  hc_table_df <- reactive({
+    d <- hc_data(); req(d, nrow(d)>0)
+    d %>% group_by(Pitch=TaggedPitchType) %>%
+      summarise(
+        Pitches=n(),
+        Velo=round(mean(RelSpeed,na.rm=TRUE),1),
+        IVB=round(mean(InducedVertBreak,na.rm=TRUE),1),
+        HB=round(mean(HorzBreak,na.rm=TRUE),1),
+        NoShape=sum(is.na(HorzBreak)|is.na(InducedVertBreak)),
+        .groups="drop"
+      ) %>% arrange(desc(Pitches))
+  })
+  output$hc_table <- renderDataTable({
+    sel <- if (isTRUE(is_admin())) "multiple" else "none"
+    datatable(hc_table_df(), options=dt_opts, rownames=FALSE, selection=sel)
+  })
+
+  # Combined selection: plot picks + any table rows (by type)
+  hc_all_ids <- reactive({
+    d <- hc_data(); if (is.null(d)||nrow(d)==0) return(character(0))
+    ids <- hc_selected_ids()
+    rows <- input$hc_table_rows_selected
+    if (!is.null(rows) && length(rows)>0) {
+      tbl <- hc_table_df()
+      rows <- rows[rows>=1 & rows<=nrow(tbl)]
+      types <- as.character(tbl$Pitch[rows])
+      ids <- unique(c(ids, as.character(d$UID[d$TaggedPitchType %in% types])))
+    }
+    unique(ids)
+  })
+
+  output$hc_count <- renderUI({
+    n <- length(hc_all_ids())
+    tags$div(class="stat-card", style="padding:10px 14px;",
+      tags$h2(style="font-size:22px;", n),
+      tags$p("pitches selected"))
+  })
+  output$hc_status <- renderUI({
+    log <- reclass_pending_log()
+    n <- if (is.null(log)) 0 else nrow(log)
+    tags$p(style="color:#8892b0;font-size:12px;margin:6px 0;",
+      paste0(n, " correction(s) applied this session, pending push to GitHub."))
+  })
+
+  # Keep the batter reclass picker populated with existing pitch types
+  observeEvent(hc_data(), {
+    d <- hc_data()
+    if (!is.null(d) && nrow(d)>0) {
+      types <- sort(unique(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType)))
+      updateSelectizeInput(session,"hc_newtype", choices=types,
+                           selected=types[1], server=FALSE)
+    }
+  })
+
+  observeEvent(input$hc_apply, {
+    req(is_admin())
+    ids <- hc_all_ids()
+    if (length(ids)==0) { showNotification("Select pitches first.", type="warning"); return() }
+    reclass_selected_ids(ids); do_reclass(input$hc_newtype)
+    hc_selected_ids(character(0)); dataTableProxy("hc_table") %>% selectRows(NULL)
+  })
+  observeEvent(input$hc_remove, {
+    req(is_admin())
+    ids <- hc_all_ids()
+    if (length(ids)==0) { showNotification("Select pitches first.", type="warning"); return() }
+    showModal(modalDialog(
+      title="Remove pitches?",
+      tags$p(paste0("Remove ", length(ids), " pitch(es) this batter has seen from the dataset?")),
+      tags$p(style="color:#8892b0;font-size:12px;",
+             "They disappear from this session immediately. Pushing to GitHub makes it permanent. Recoverable from git history."),
+      footer=tagList(modalButton("Cancel"),
+                     actionButton("hc_remove_confirm","Remove", class="btn-primary")),
+      easyClose=TRUE))
+  })
+  observeEvent(input$hc_remove_confirm, {
+    req(is_admin()); removeModal()
+    ids <- hc_all_ids(); if (length(ids)==0) return()
+    reclass_selected_ids(ids); do_delete()
+    hc_selected_ids(character(0)); dataTableProxy("hc_table") %>% selectRows(NULL)
+  })
+  observeEvent(input$hc_push, { req(is_admin()); do_push() })
+
+
   # ── Remove pitches by Arsenal-table row (for shapeless types the movement
   #    plot can't reach, e.g. a stray "Other" with no IVB/HB). Selecting a row
   #    targets EVERY pitch of that type for the current pitcher/outing filter.
@@ -3307,6 +3496,10 @@ server <- function(input, output, session) {
     "Heat Map (Combined)"    = "heatmap_all",
     "L/R Splits Table"       = "splits",
     "Pitch Type Splits"      = "pt_splits",
+    "Plate Discipline by Pitch"= "pd_by_pitch",
+    "Batted Ball by Pitch"   = "bb_by_pitch",
+    "Discipline by Count"    = "count_splits",
+    "Swing/Whiff by Location"= "loc_tendency",
     "Batted Ball Rates"      = "batted_ball",
     "wOBA Trend"             = "woba_trend"
   )
@@ -3806,8 +3999,104 @@ server <- function(input, output, session) {
       }
     }
 
+    # ── Plate discipline BY PITCH TYPE ────────────────────────────────────────
+    if ("pd_by_pitch" %in% sections) {
+      pd <- d %>% filter(!is.na(PlateLocSide), !is.na(PlateLocHeight)) %>%
+        mutate(InZone=dplyr::between(PlateLocHeight,1.59,3.41)&
+                      dplyr::between(PlateLocSide,-1,1),
+               IsSwing=PitchCall%in%c("FoulBall","StrikeSwinging","InPlay"),
+               IsWhiff=PitchCall=="StrikeSwinging",
+               IsContact=PitchCall%in%c("FoulBall","InPlay"))
+      if (nrow(pd)>0) {
+        tbl <- pd %>% group_by(Pitch=TaggedPitchType) %>%
+          summarise(
+            N=n(),
+            `Swing%`=paste0(round(mean(IsSwing)*100,1),"%"),
+            `Z-Swing%`=paste0(round(mean(IsSwing[InZone])*100,1),"%"),
+            `Chase%`=paste0(round(mean(IsSwing[!InZone])*100,1),"%"),
+            `Whiff%`=paste0(round(sum(IsWhiff)/max(sum(IsSwing),1)*100,1),"%"),
+            `Z-Con%`=paste0(round(sum(IsContact&InZone)/max(sum(IsSwing&InZone),1)*100,1),"%"),
+            `CSW%`=paste0(round((sum(PitchCall=="StrikeCalled")+sum(IsWhiff))/n()*100,1),"%"),
+            .groups="drop") %>% arrange(desc(N))
+        plots[["pd_by_pitch"]] <- list(type="table", data=as.data.frame(tbl),
+          title=paste(batter_name,"— Plate Discipline by Pitch Type"))
+      }
+    }
+
+    # ── Batted ball quality BY PITCH TYPE (EV / LA / hard-hit) ─────────────────
+    if ("bb_by_pitch" %in% sections) {
+      bbe <- d %>% filter(PitchCall=="InPlay", !is.na(ExitSpeed))
+      if (nrow(bbe)>0) {
+        tbl <- bbe %>% group_by(Pitch=TaggedPitchType) %>%
+          summarise(
+            BBE=n(),
+            `Avg EV`=round(mean(ExitSpeed,na.rm=TRUE),1),
+            `Max EV`=round(max(ExitSpeed,na.rm=TRUE),1),
+            `Avg LA`=round(mean(Angle,na.rm=TRUE),1),
+            `HardHit%`=paste0(round(mean(ExitSpeed>=95,na.rm=TRUE)*100,1),"%"),
+            `Barrel%`=paste0(round(mean(ExitSpeed>=98 & Angle>=8 & Angle<=32,na.rm=TRUE)*100,1),"%"),
+            .groups="drop") %>% arrange(desc(BBE))
+        plots[["bb_by_pitch"]] <- list(type="table", data=as.data.frame(tbl),
+          title=paste(batter_name,"— Batted Ball Quality by Pitch Type"))
+      }
+    }
+
+    # ── Discipline by COUNT STATE ─────────────────────────────────────────────
+    if ("count_splits" %in% sections) {
+      cd <- d %>% filter(!is.na(Balls), !is.na(Strikes),
+                         !is.na(PlateLocSide), !is.na(PlateLocHeight)) %>%
+        mutate(
+          CountState=dplyr::case_when(
+            Balls==0 & Strikes==0 ~ "First Pitch",
+            Strikes==2            ~ "Two Strikes",
+            Balls>Strikes         ~ "Ahead",
+            Strikes>Balls         ~ "Behind",
+            TRUE                  ~ "Even"),
+          InZone=dplyr::between(PlateLocHeight,1.59,3.41)&dplyr::between(PlateLocSide,-1,1),
+          IsSwing=PitchCall%in%c("FoulBall","StrikeSwinging","InPlay"),
+          IsWhiff=PitchCall=="StrikeSwinging")
+      if (nrow(cd)>0) {
+        ord <- c("First Pitch","Ahead","Even","Behind","Two Strikes")
+        tbl <- cd %>% group_by(Count=CountState) %>%
+          summarise(
+            Pitches=n(),
+            `Swing%`=paste0(round(mean(IsSwing)*100,1),"%"),
+            `Chase%`=paste0(round(mean(IsSwing[!InZone])*100,1),"%"),
+            `Whiff%`=paste0(round(sum(IsWhiff)/max(sum(IsSwing),1)*100,1),"%"),
+            .groups="drop") %>%
+          mutate(Count=factor(Count,levels=ord)) %>% arrange(Count) %>%
+          mutate(Count=as.character(Count))
+        plots[["count_splits"]] <- list(type="table", data=as.data.frame(tbl),
+          title=paste(batter_name,"— Discipline by Count"))
+      }
+    }
+
+    # ── Swing/Whiff by pitch LOCATION region ──────────────────────────────────
+    if ("loc_tendency" %in% sections) {
+      lt <- d %>% filter(!is.na(PlateLocSide), !is.na(PlateLocHeight)) %>%
+        mutate(
+          Region=dplyr::case_when(
+            dplyr::between(PlateLocHeight,1.59,3.41)&dplyr::between(PlateLocSide,-1,1) ~ "In Zone",
+            PlateLocHeight>3.41 ~ "High", PlateLocHeight<1.59 ~ "Low",
+            PlateLocSide< -1 ~ "Inside", PlateLocSide> 1 ~ "Outside", TRUE ~ "Edge"),
+          IsSwing=PitchCall%in%c("FoulBall","StrikeSwinging","InPlay"),
+          IsWhiff=PitchCall=="StrikeSwinging")
+      if (nrow(lt)>0) {
+        tbl <- lt %>% group_by(Location=Region) %>%
+          summarise(
+            Pitches=n(),
+            `Swing%`=paste0(round(mean(IsSwing)*100,1),"%"),
+            `Whiff%`=paste0(round(sum(IsWhiff)/max(sum(IsSwing),1)*100,1),"%"),
+            .groups="drop") %>% arrange(desc(Pitches))
+        plots[["loc_tendency"]] <- list(type="table", data=as.data.frame(tbl),
+          title=paste(batter_name,"— Swing/Whiff by Location"))
+      }
+    }
+
     Filter(Negate(is.null), plots)
   }
+
+  # (build_hitter_plots ends above)
 
   # ── Preview (first selected player) ──────────────────────────────────────
   # Built once as a debounced reactive so rapid checkbox toggling doesn't rebuild
