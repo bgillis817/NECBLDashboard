@@ -25,6 +25,9 @@ library(openxlsx)
 
 # ── Single combined CSV on GitHub ─────────────────────────────────────────────
 NECBL_CSV_URL <- "https://raw.githubusercontent.com/bgillis817/NECBLDashboard/main/NECBL_All.csv"
+# Per-player expected stats, produced daily by the xStatsNECBL pipeline.
+# Small CSV: Batter, Season, PA, AB, BBE, xwOBA, xwOBACON. Joined by name+season.
+XWOBA_CSV_URL <- "https://raw.githubusercontent.com/bgillis817/xStatsNECBL/main/player_xwoba.csv"
 GH_REPO       <- "bgillis817/NECBLDashboard"
 GH_BRANCH     <- "main"
 CORRECTIONS_PATH <- "corrections.csv"
@@ -766,17 +769,24 @@ main_ui <- navbarPage(
         uiOutput("h_dateRangeUI"),
         uiOutput("h_pitchTypeUI"),
         tags$hr(),
-        uiOutput("h_playerInfo")
+        uiOutput("h_playerInfo"),
+        tags$hr(),
+        tags$div(class="section-header",style="font-size:14px;","Admin Tools"),
+        passwordInput("h_admin_pw","Admin Password",value=""),
+        actionButton("h_admin_login","Unlock",class="btn-default btn-sm"),
+        uiOutput("h_admin_status")
       ),
       mainPanel(width=9,
         tabsetPanel(
           tabPanel("Overview",
             br(),
             fluidRow(
-              column(3,uiOutput("h_card_pa")),
-              column(3,uiOutput("h_card_woba")),
-              column(3,uiOutput("h_card_obp")),
-              column(3,uiOutput("h_card_slg"))
+              column(2,uiOutput("h_card_pa")),
+              column(2,uiOutput("h_card_woba")),
+              column(2,uiOutput("h_card_xwoba")),
+              column(2,uiOutput("h_card_xwobacon")),
+              column(2,uiOutput("h_card_obp")),
+              column(2,uiOutput("h_card_slg"))
             ),
             br(),
             tags$div(class="section-header","Spray Chart"),
@@ -1432,6 +1442,21 @@ server <- function(input, output, session) {
   p_seqs_r  <- reactive({ refresh_trigger(); .raw_cache$p_seqs_all  })
   p_pairs_r <- reactive({ refresh_trigger(); .raw_cache$p_pairs_all })
 
+  # Expected stats (xwOBA / xwOBACON) from the xStatsNECBL pipeline. Fetched
+  # once, cache-busted on manual refresh. Returns Batter, Season, xwOBA, xwOBACON
+  # (plus PA/BBE) — joined into hitter tables by name + season. Fails soft: if
+  # the file is unreachable, tables just show blank xwOBA rather than erroring.
+  xwoba_data <- reactive({
+    refresh_trigger()
+    tryCatch({
+      url <- paste0(XWOBA_CSV_URL, "?nocache=",
+                    format(as.numeric(Sys.time())*1000, scientific=FALSE, trim=TRUE))
+      df <- readr::read_csv(url, show_col_types=FALSE, progress=FALSE)
+      if (is.null(df) || nrow(df)==0) return(NULL)
+      df %>% mutate(Batter=as.character(Batter), Season=as.character(Season))
+    }, error=function(e) { message("xwOBA fetch skipped: ", e$message); NULL })
+  })
+
   h_season <- reactive({ input$h_season %||% "2026" })
   p_season <- reactive({ input$p_season %||% "2026" })
   lb_season <- reactive({ input$lb_season %||% "2026" })
@@ -1539,6 +1564,21 @@ server <- function(input, output, session) {
   output$h_card_woba <- renderUI({ s<-h_stats();req(s); stat_card(sprintf("%.3f",s$woba),"wOBA") })
   output$h_card_obp  <- renderUI({ s<-h_stats();req(s); stat_card(sprintf("%.3f",s$obp),"OBP") })
   output$h_card_slg  <- renderUI({ s<-h_stats();req(s); stat_card(sprintf("%.3f",s$slg),"SLG") })
+
+  # Expected stats for the selected batter, from the xStatsNECBL join
+  h_xwoba_row <- reactive({
+    xw <- xwoba_data(); req(!is.null(xw), input$h_batter)
+    r <- xw %>% filter(Batter==input$h_batter, Season==as.character(h_season()))
+    if (nrow(r)==0) NULL else r[1,]
+  })
+  output$h_card_xwoba <- renderUI({
+    r <- h_xwoba_row()
+    if (is.null(r)) stat_card("\u2014","xwOBA") else stat_card(sprintf("%.3f", r$xwOBA),"xwOBA")
+  })
+  output$h_card_xwobacon <- renderUI({
+    r <- h_xwoba_row()
+    if (is.null(r)) stat_card("\u2014","xwOBACON") else stat_card(sprintf("%.3f", r$xwOBACON),"xwOBACON")
+  })
 
   h_spray_plot <- reactive({
     d <- h_pa() %>%
@@ -1976,6 +2016,26 @@ server <- function(input, output, session) {
 
   output$p_is_admin <- reactive({ is_admin() })
   outputOptions(output, "p_is_admin", suspendWhenHidden=FALSE)
+
+  # Same admin unlock, mirrored on the Hitters sidebar. Shares is_admin() state,
+  # so unlocking from either side enables admin tools everywhere.
+  observeEvent(input$h_admin_login, {
+    pw <- get_admin_password()
+    if (nchar(pw) > 0 && !is.null(input$h_admin_pw) && input$h_admin_pw == pw) {
+      is_admin(TRUE)
+      showNotification("Admin mode unlocked.", type="message", duration=3)
+    } else {
+      is_admin(FALSE)
+      showNotification("Incorrect password.", type="error", duration=3)
+    }
+  })
+
+  output$h_admin_status <- renderUI({
+    if (is_admin())
+      tags$p(style="color:#4ECDC4;font-size:11px;margin-top:6px;","\u2713 Admin mode active")
+    else
+      tags$p(style="color:#6b7280;font-size:11px;margin-top:6px;","")
+  })
 
   output$p_admin_status <- renderUI({
     if (is_admin())
@@ -3774,7 +3834,7 @@ server <- function(input, output, session) {
   }
 
   # ── Helper: build one hitter page ─────────────────────────────────────────
-  build_hitter_plots <- function(batter_name, sections, h_df) {
+  build_hitter_plots <- function(batter_name, sections, h_df, xwoba_row=NULL) {
     d <- h_df %>% filter(Batter == batter_name)
     if (nrow(d) == 0) return(list())
 
@@ -3799,6 +3859,13 @@ server <- function(input, output, session) {
                 sprintf("%.3f",ifelse(ab>0,(h+bb+hbp)/pa+tb/ab,NA)),
                 sprintf("%.3f",sum(d$wOBA_contribution,na.rm=TRUE)/pa))
       )
+      # Append expected stats from the xStatsNECBL join, if available
+      if (!is.null(xwoba_row) && nrow(xwoba_row)>0) {
+        tbl <- rbind(tbl, data.frame(
+          Stat=c("xwOBA","xwOBACON"),
+          Value=c(sprintf("%.3f", xwoba_row$xwOBA[1]),
+                  sprintf("%.3f", xwoba_row$xwOBACON[1]))))
+      }
       plots[["summary"]] <- list(type="table",data=tbl,
                                   title=paste(batter_name,"— Season Stats"))
     }
@@ -4106,6 +4173,14 @@ server <- function(input, output, session) {
   # and eventually take the R process down ("disconnected from server").
   SR_MAX_PREVIEW_PLOTS <- 12
 
+  # Look up a player's expected-stats row for the scouting-report season
+  xwoba_for <- function(player) {
+    xw <- xwoba_data()
+    if (is.null(xw)) return(NULL)
+    r <- xw %>% filter(Batter==player, Season==as.character(sr_season()))
+    if (nrow(r)==0) NULL else r
+  }
+
   sr_preview_items <- reactive({
     req(input$sr_players, length(input$sr_players)>0,
         input$sr_sections, length(input$sr_sections)>0)
@@ -4116,7 +4191,7 @@ server <- function(input, output, session) {
       build_pitcher_plots(player, sections, d, p_seqs_r())
     } else {
       d <- hitters_data() %>% filter(Season==as.integer(sr_season()))
-      build_hitter_plots(player, sections, d)
+      build_hitter_plots(player, sections, d, xwoba_for(player))
     }
   }) %>% shiny::debounce(700)
 
@@ -4244,7 +4319,7 @@ server <- function(input, output, session) {
 
       build_for <- function(player) {
         if (input$sr_type == "pitcher") build_pitcher_plots(player, sections, d_all, p_seqs_r())
-        else                            build_hitter_plots(player, sections, d_all)
+        else                            build_hitter_plots(player, sections, d_all, xwoba_for(player))
       }
 
       # value -> human label for section headings
@@ -4327,7 +4402,7 @@ server <- function(input, output, session) {
         if (input$sr_type == "pitcher") {
           plot_list <- build_pitcher_plots(player, sections, d_all, p_seqs_r())
         } else {
-          plot_list <- build_hitter_plots(player, sections, d_all)
+          plot_list <- build_hitter_plots(player, sections, d_all, xwoba_for(player))
         }
         if (length(plot_list) == 0) next
 
@@ -4409,6 +4484,14 @@ server <- function(input, output, session) {
       filter(PA>=min_pa)%>%
       arrange(desc(wOBA))%>%
       dplyr::select(Batter,Team,PA,BA,OBP,SLG,wOBA,HR,`2B`,`3B`,BB)
+    # Join expected stats (xwOBA / xwOBACON) by name + season, if available
+    xw <- xwoba_data()
+    if (!is.null(xw)) {
+      xw_s <- xw %>% filter(Season==as.character(lb_season())) %>%
+        dplyr::select(Batter, xwOBA, xwOBACON)
+      tbl <- tbl %>% left_join(xw_s, by="Batter") %>%
+        dplyr::relocate(xwOBA, xwOBACON, .after=wOBA)
+    }
     tbl
   })
   output$lb_hitters <- renderDataTable({ datatable(lb_hitters_df(), options=dt_opts, rownames=FALSE) })
