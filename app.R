@@ -2351,22 +2351,31 @@ server <- function(input, output, session) {
       ) %>%
       plotly::config(displaylogo=FALSE,
                      modeBarButtonsToAdd=c("lasso2d","select2d")) %>%
-      plotly::event_register("plotly_selected")
+      plotly::event_register("plotly_selected") %>%
+      plotly::event_register("plotly_click")
   })
 
   observeEvent(plotly::event_data("plotly_selected", source="hc_movement_select"), {
     sel <- plotly::event_data("plotly_selected", source="hc_movement_select")
-    if (!is.null(sel) && nrow(sel)>0) {
-      ids <- if (!is.null(sel$key)) sel$key else sel$customdata
-      hc_selected_ids(unique(as.character(ids)))
+    # event_data can return NULL, a bare list, or an empty tibble on deselect.
+    # nrow() is NULL for a list, and `TRUE && logical(0)` is NA -> if(NA) crashes
+    # the observer and drops the session. Guard on names(), never on nrow().
+    if (!is.null(sel) && is.data.frame(sel) && NROW(sel) > 0) {
+      ids <- if ("key" %in% names(sel)) sel$key else
+             if ("customdata" %in% names(sel)) sel$customdata else NULL
+      if (!is.null(ids)) hc_selected_ids(unique(as.character(ids)))
     }
   })
   observeEvent(plotly::event_data("plotly_click", source="hc_movement_select"), {
     cl <- plotly::event_data("plotly_click", source="hc_movement_select")
-    if (!is.null(cl) && nrow(cl)>0) {
-      id <- as.character(if (!is.null(cl$key)) cl$key else cl$customdata)
-      cur <- hc_selected_ids()
-      hc_selected_ids(if (id %in% cur) setdiff(cur, id) else c(cur, id))
+    if (!is.null(cl) && is.data.frame(cl) && NROW(cl) > 0) {
+      id <- if ("key" %in% names(cl)) cl$key else
+            if ("customdata" %in% names(cl)) cl$customdata else NULL
+      if (!is.null(id) && length(id) > 0 && !is.na(id[1])) {
+        id  <- as.character(id[1])
+        cur <- hc_selected_ids()
+        hc_selected_ids(if (id %in% cur) setdiff(cur, id) else c(cur, id))
+      }
     }
   })
 
