@@ -1316,10 +1316,11 @@ main_ui <- navbarPage(
           tags$div(class="section-header",style="font-size:14px;","PDF Layout"),
           radioButtons("sr_layout", NULL,
             choices=c("One page per player"="player",
+                      "One chart per page"="single",
                       "Group players together (big tables)"="combined"),
             selected="player"),
           tags$p(style="color:#6b7280;font-size:11px;margin-top:-6px;",
-                 "Group mode merges every player into one large table per section \u2014 best when picking only a section or two."),
+                 "One chart per page = each table/plot gets its own full page (best for a single-player deep dive). Group mode merges every player into one large table per section."),
           tags$hr()
         ),
 
@@ -3558,6 +3559,8 @@ server <- function(input, output, session) {
     "Pitch Type Splits"      = "pt_splits",
     "Plate Discipline by Pitch"= "pd_by_pitch",
     "Batted Ball by Pitch"   = "bb_by_pitch",
+    "Batted Ball vs LHP/RHP" = "bb_by_hand",
+    "Batted Ball Hand \u00d7 Pitch"= "bb_hand_pitch",
     "Discipline by Count"    = "count_splits",
     "Swing/Whiff by Location"= "loc_tendency",
     "Batted Ball Rates"      = "batted_ball",
@@ -4100,11 +4103,50 @@ server <- function(input, output, session) {
             `Avg EV`=round(mean(ExitSpeed,na.rm=TRUE),1),
             `Max EV`=round(max(ExitSpeed,na.rm=TRUE),1),
             `Avg LA`=round(mean(Angle,na.rm=TRUE),1),
-            `HardHit%`=paste0(round(mean(ExitSpeed>=95,na.rm=TRUE)*100,1),"%"),
-            `Barrel%`=paste0(round(mean(ExitSpeed>=98 & Angle>=8 & Angle<=32,na.rm=TRUE)*100,1),"%"),
+            `HardHit%`=paste0(round(mean(ExitSpeed>=90,na.rm=TRUE)*100,1),"%"),
+            `Barrel%`=paste0(round(mean(ExitSpeed>=90 & Angle>=8 & Angle<=32,na.rm=TRUE)*100,1),"%"),
             .groups="drop") %>% arrange(desc(BBE))
         plots[["bb_by_pitch"]] <- list(type="table", data=as.data.frame(tbl),
           title=paste(batter_name,"— Batted Ball Quality by Pitch Type"))
+      }
+    }
+
+    # ── Batted ball quality by PITCHER HANDEDNESS ─────────────────────────────
+    if ("bb_by_hand" %in% sections) {
+      bbe <- d %>% filter(PitchCall=="InPlay", !is.na(ExitSpeed),
+                          PitcherThrows %in% c("Right","Left"))
+      if (nrow(bbe)>0) {
+        tbl <- bbe %>% group_by(`vs Hand`=PitcherThrows) %>%
+          summarise(
+            BBE=n(),
+            `Avg EV`=round(mean(ExitSpeed,na.rm=TRUE),1),
+            `Max EV`=round(max(ExitSpeed,na.rm=TRUE),1),
+            `Avg LA`=round(mean(Angle,na.rm=TRUE),1),
+            `HardHit%`=paste0(round(mean(ExitSpeed>=90,na.rm=TRUE)*100,1),"%"),
+            `Barrel%`=paste0(round(mean(ExitSpeed>=90 & Angle>=8 & Angle<=32,na.rm=TRUE)*100,1),"%"),
+            .groups="drop") %>% arrange(desc(BBE))
+        plots[["bb_by_hand"]] <- list(type="table", data=as.data.frame(tbl),
+          title=paste(batter_name,"— Batted Ball Quality vs LHP/RHP"))
+      }
+    }
+
+    # ── Batted ball quality by HANDEDNESS x PITCH TYPE ────────────────────────
+    if ("bb_hand_pitch" %in% sections) {
+      bbe <- d %>% filter(PitchCall=="InPlay", !is.na(ExitSpeed),
+                          PitcherThrows %in% c("Right","Left"))
+      if (nrow(bbe)>0) {
+        tbl <- bbe %>% group_by(`vs Hand`=PitcherThrows, Pitch=TaggedPitchType) %>%
+          summarise(
+            BBE=n(),
+            `Avg EV`=round(mean(ExitSpeed,na.rm=TRUE),1),
+            `Avg LA`=round(mean(Angle,na.rm=TRUE),1),
+            `HardHit%`=paste0(round(mean(ExitSpeed>=90,na.rm=TRUE)*100,1),"%"),
+            .groups="drop") %>%
+          filter(BBE>=2) %>%
+          arrange(`vs Hand`, desc(BBE))
+        if (nrow(tbl)>0)
+          plots[["bb_hand_pitch"]] <- list(type="table", data=as.data.frame(tbl),
+            title=paste(batter_name,"— Batted Ball by Hand \u00d7 Pitch Type"))
       }
     }
 
@@ -4407,14 +4449,16 @@ server <- function(input, output, session) {
         if (length(plot_list) == 0) next
 
         # Convert all items to ggplot objects
+        single_mode <- (input$sr_layout %||% "player") == "single"
         gg_items <- lapply(names(plot_list), function(nm) {
           item <- plot_list[[nm]]
           if (item$type == "plot" && !is.null(item$plot)) {
             to_print_theme(item$plot)
           } else if (item$type == "table" && !is.null(item$data)) {
-            # fewer sections on the page -> bigger table text
+            # fewer sections on the page -> bigger table text; full page -> biggest
             make_tbl_plot(item$data, item$title,
-                          fsize=if (length(plot_list) <= 2) 4.6
+                          fsize=if (single_mode) 5.2
+                                else if (length(plot_list) <= 2) 4.6
                                 else if (length(plot_list) <= 4) 3.8 else 3)
           } else NULL
         })
@@ -4422,6 +4466,18 @@ server <- function(input, output, session) {
         if (length(gg_items) == 0) next
 
         n_items <- length(gg_items)
+
+        # One-chart-per-page mode: each item gets its own full page.
+        if ((input$sr_layout %||% "player") == "single") {
+          for (i in seq_len(n_items)) {
+            grid::grid.newpage()
+            page_header(paste0(player,"    |    ",input$sr_team,"    |    ",sr_season(),
+                               " NECBL Scouting Report    |    ",format(Sys.Date(),"%b %d, %Y")))
+            vp <- grid::viewport(x=0.5, y=0.46, width=0.94, height=0.88)
+            print(gg_items[[i]], vp=vp)
+          }
+          next
+        }
 
         # One page per pitcher — grid sized so everything selected fits.
         ncol <- max(1, ceiling(sqrt(n_items)))
