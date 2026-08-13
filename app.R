@@ -23,6 +23,16 @@ library(openxlsx)
 # ── Null coalesce ─────────────────────────────────────────────────────────────
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
 
+# Values that are NOT real pitch types but have leaked into TaggedPitchType via
+# mis-entry (e.g. a PitchCall like "BallCalled"). Filtered out of the reclassify
+# dropdowns only — every genuine pitch type still passes through untouched.
+INVALID_PITCH_TYPES <- c("BallCalled","StrikeCalled","StrikeSwinging","FoulBall",
+                         "InPlay","HitByPitch","BallinDirt")
+clean_pitch_types <- function(x) {
+  x <- unique(x[!is.na(x) & nzchar(x)])
+  sort(x[!x %in% INVALID_PITCH_TYPES])
+}
+
 # ── Single combined CSV on GitHub ─────────────────────────────────────────────
 NECBL_CSV_URL <- "https://raw.githubusercontent.com/bgillis817/NECBLDashboard/main/NECBL_All.csv"
 # Per-player expected stats, produced daily by the xStatsNECBL pipeline.
@@ -900,6 +910,17 @@ main_ui <- navbarPage(
               tags$div(class="section-header","Correct Pitches Seen"),
               tags$div(class="section-sub",
                 "Every pitch this batter has faced, by movement. Lasso/box-select points (or click to toggle), then reclassify or remove. Fixes the shared pitch record, so it corrects the pitcher's data too. Use the table below for stray types with no movement data."),
+              tags$div(class="filter-bar",
+                fluidRow(
+                  column(3,
+                    radioButtons("hc_hand","Pitcher Throws",
+                                 choices=c("All","Right","Left"),
+                                 selected="All", inline=TRUE)),
+                  column(9,
+                    tags$p(style="color:#8892b0;font-size:11px;margin-top:26px;",
+                           "Filter the plot below to pitches from RHP or LHP only."))
+                )
+              ),
               tags$div(class="filter-bar",
                 fluidRow(
                   column(3, uiOutput("hc_count")),
@@ -2268,7 +2289,7 @@ server <- function(input, output, session) {
   observeEvent(p_admin_data(), {
     d <- p_admin_data()
     if (!is.null(d) && nrow(d)>0) {
-      types <- sort(unique(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType)))
+      types <- clean_pitch_types(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType))
       updateSelectizeInput(session,"p_reclass_newtype",    choices=types, selected=types[1], server=FALSE)
       updateSelectizeInput(session,"p_vs_reclass_newtype", choices=types, selected=types[1], server=FALSE)
     }
@@ -2292,6 +2313,8 @@ server <- function(input, output, session) {
     d <- h_raw() %>% filter(Batter == input$h_batter)
     if (!is.null(input$h_dateRange))
       d <- d %>% filter(Date>=input$h_dateRange[1], Date<=input$h_dateRange[2])
+    if (!is.null(input$hc_hand) && input$hc_hand != "All")
+      d <- d %>% filter(PitcherThrows == input$hc_hand)
     d
   })
 
@@ -2306,9 +2329,10 @@ server <- function(input, output, session) {
       customdata=~UID, key=~UID, type="scatter", mode="markers",
       marker=list(size=8, opacity=0.8),
       text=~paste0(TaggedPitchType,
-                   "<br>Pitcher: ", Pitcher,
+                   "<br>Pitcher: ", Pitcher, " (", PitcherThrows, ")",
                    "<br>Date: ", Date,
                    "<br>Velo: ", round(RelSpeed,1),
+                   "<br>Spin: ", round(SpinRate,0), " rpm",
                    "<br>IVB: ", round(InducedVertBreak,1), " in",
                    "<br>HB: ", round(HorzBreak,1), " in",
                    "<br>Count: ", Balls, "-", Strikes),
@@ -2395,7 +2419,7 @@ server <- function(input, output, session) {
   observeEvent(hc_data(), {
     d <- hc_data()
     if (!is.null(d) && nrow(d)>0) {
-      types <- sort(unique(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType)))
+      types <- clean_pitch_types(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType))
       updateSelectizeInput(session,"hc_newtype", choices=types,
                            selected=types[1], server=FALSE)
     }
