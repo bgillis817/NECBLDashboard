@@ -28,6 +28,12 @@ library(openxlsx)
 # dropdowns only — every genuine pitch type still passes through untouched.
 INVALID_PITCH_TYPES <- c("BallCalled","StrikeCalled","StrikeSwinging","FoulBall",
                          "InPlay","HitByPitch","BallinDirt")
+# Default pre-selected value in every reclassify dropdown. Alphabetical first
+# was landing on junk; ChangeUp is a real type and a deliberate starting point.
+DEFAULT_RECLASS_TYPE <- "ChangeUp"
+pick_default_type <- function(types) {
+  if (DEFAULT_RECLASS_TYPE %in% types) DEFAULT_RECLASS_TYPE else types[1]
+}
 clean_pitch_types <- function(x) {
   x <- unique(x[!is.na(x) & nzchar(x)])
   sort(x[!x %in% INVALID_PITCH_TYPES])
@@ -926,7 +932,8 @@ main_ui <- navbarPage(
                   column(3, uiOutput("hc_count")),
                   column(3,
                     selectizeInput("hc_newtype","New Pitch Type",
-                                   choices=NULL, options=list(create=TRUE))),
+                                   choices=DEFAULT_RECLASS_TYPE, selected=DEFAULT_RECLASS_TYPE,
+                                   options=list(create=TRUE))),
                   column(2,
                     actionButton("hc_apply","Apply", class="btn-primary",
                                  style="margin-top:24px;")),
@@ -1053,7 +1060,8 @@ main_ui <- navbarPage(
                   column(2, uiOutput("p_reclass_count")),
                   column(3,
                     selectizeInput("p_reclass_newtype","New Pitch Type",
-                                   choices=NULL, options=list(create=TRUE))
+                                   choices=DEFAULT_RECLASS_TYPE, selected=DEFAULT_RECLASS_TYPE,
+                                   options=list(create=TRUE))
                   ),
                   column(1,
                     actionButton("p_reclass_apply","Apply",class="btn-primary",
@@ -1180,7 +1188,8 @@ main_ui <- navbarPage(
                   column(2, uiOutput("p_vs_reclass_count")),
                   column(3,
                     selectizeInput("p_vs_reclass_newtype","New Pitch Type",
-                                   choices=NULL, options=list(create=TRUE))),
+                                   choices=DEFAULT_RECLASS_TYPE, selected=DEFAULT_RECLASS_TYPE,
+                                   options=list(create=TRUE))),
                   column(2,
                     actionButton("p_vs_reclass_apply","Apply",class="btn-primary",
                                  style="margin-top:24px;")),
@@ -1530,7 +1539,7 @@ server <- function(input, output, session) {
 
   output$h_pitchTypeUI <- renderUI({
     req(!is.null(h_raw()))
-    choices <- c("All",sort(unique(h_raw()$TaggedPitchType)))
+    choices <- c("All",clean_pitch_types(h_raw()$TaggedPitchType))
     prev <- isolate(input$h_pitchType)
     sel  <- if (!is.null(prev) && prev %in% choices) prev else "All"
     selectInput("h_pitchType","Pitch Type", choices=choices, selected=sel)
@@ -1688,7 +1697,7 @@ server <- function(input, output, session) {
   output$h_pd_pitch_ui <- renderUI({
     req(!is.null(h_raw()))
     selectInput("h_pd_pitch","Pitch Type",
-                choices=c("All Pitches",sort(unique(h_raw()$TaggedPitchType))))
+                choices=c("All Pitches",clean_pitch_types(h_raw()$TaggedPitchType)))
   })
   output$h_pd_count_ui <- renderUI({
     req(!is.null(h_raw()), input$h_batter)
@@ -1842,7 +1851,7 @@ server <- function(input, output, session) {
   output$h_bb_pitch_ui <- renderUI({
     req(!is.null(h_raw()))
     selectInput("h_bb_pitch","Pitch Type",
-                choices=c("All Pitches",sort(unique(h_raw()$TaggedPitchType))))
+                choices=c("All Pitches",clean_pitch_types(h_raw()$TaggedPitchType)))
   })
   output$h_bb_card_gb <- renderUI({
     d<-h_bb_data();req(nrow(d)>0)
@@ -1892,7 +1901,7 @@ server <- function(input, output, session) {
   output$h_hm_pitch_ui <- renderUI({
     req(!is.null(h_raw()))
     selectInput("h_hm_pitch","Pitch Type",
-                choices=c("All Pitches",sort(unique(h_raw()$TaggedPitchType))))
+                choices=c("All Pitches",clean_pitch_types(h_raw()$TaggedPitchType)))
   })
   output$h_hm_count_ui <- renderUI({
     req(!is.null(h_raw()),input$h_batter)
@@ -1969,7 +1978,7 @@ server <- function(input, output, session) {
 
   output$p_pitchTypeUI <- renderUI({
     req(!is.null(p_raw()))
-    choices <- c("All",sort(unique(p_raw()$TaggedPitchType)))
+    choices <- c("All",clean_pitch_types(p_raw()$TaggedPitchType))
     prev <- isolate(input$p_pitchType)
     sel  <- if (!is.null(prev) && prev %in% choices) prev else "All"
     selectInput("p_pitchType","Pitch Type", choices=choices, selected=sel)
@@ -2290,8 +2299,9 @@ server <- function(input, output, session) {
     d <- p_admin_data()
     if (!is.null(d) && nrow(d)>0) {
       types <- clean_pitch_types(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType))
-      updateSelectizeInput(session,"p_reclass_newtype",    choices=types, selected=types[1], server=FALSE)
-      updateSelectizeInput(session,"p_vs_reclass_newtype", choices=types, selected=types[1], server=FALSE)
+      dflt <- pick_default_type(types)
+      updateSelectizeInput(session,"p_reclass_newtype",    choices=types, selected=dflt, server=FALSE)
+      updateSelectizeInput(session,"p_vs_reclass_newtype", choices=types, selected=dflt, server=FALSE)
     }
   })
 
@@ -2430,7 +2440,7 @@ server <- function(input, output, session) {
     if (!is.null(d) && nrow(d)>0) {
       types <- clean_pitch_types(c(d$TaggedPitchType, .raw_cache$raw_all$TaggedPitchType))
       updateSelectizeInput(session,"hc_newtype", choices=types,
-                           selected=types[1], server=FALSE)
+                           selected=pick_default_type(types), server=FALSE)
     }
   })
 
@@ -2963,7 +2973,7 @@ server <- function(input, output, session) {
   output$p_hm_pitch_ui <- renderUI({
     req(!is.null(p_raw()))
     selectInput("p_hm_pitch","Pitch Type",
-                choices=c("All Pitches",sort(unique(p_raw()$TaggedPitchType))))
+                choices=c("All Pitches",clean_pitch_types(p_raw()$TaggedPitchType)))
   })
   output$p_hm_count_ui <- renderUI({
     d<-p_filt();if(is.null(d)) return(NULL)
@@ -3002,7 +3012,7 @@ server <- function(input, output, session) {
   output$p_pl_pitch_ui <- renderUI({
     req(!is.null(p_raw()))
     selectInput("p_pl_pitch","Pitch Type",
-                choices=c("All Pitches",sort(unique(p_raw()$TaggedPitchType))))
+                choices=c("All Pitches",clean_pitch_types(p_raw()$TaggedPitchType)))
   })
   output$p_pl_count_ui <- renderUI({
     d<-p_filt();if(is.null(d)) return(NULL)
@@ -3257,7 +3267,7 @@ server <- function(input, output, session) {
   output$p_bb_pitch_ui <- renderUI({
     req(!is.null(p_raw()))
     selectInput("p_bb_pitch","Pitch Type",
-                choices=c("All Pitches",sort(unique(p_raw()$TaggedPitchType))))
+                choices=c("All Pitches",clean_pitch_types(p_raw()$TaggedPitchType)))
   })
   output$p_bb_card_gb <- renderUI({
     d<-p_bb_data();req(nrow(d)>0)
