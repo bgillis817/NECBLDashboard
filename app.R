@@ -1,4 +1,4 @@
-# ============================================================================
+   # ============================================================================
 #  NECBL DASHBOARD
 #  All teams · 2025-2026 season toggle · Hitters + Pitchers
 #  Google Drive data ingestion · Team to Player navigation
